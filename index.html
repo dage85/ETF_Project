@@ -2,70 +2,171 @@
 <html lang="it">
 <head>
     <meta charset="UTF-8">
-    <title>ETF Dashboard - SWDA.MI</title>
+    <title>Gestione Portafogli ETF</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
-        body { font-family: sans-serif; max-width: 900px; margin: 40px auto; padding: 0 20px; text-align: center; }
-        .chart-container { position: relative; height: 450px; width: 100%; margin-top: 30px; }
-        select { padding: 8px; font-size: 16px; border-radius: 5px; }
+        body { font-family: sans-serif; max-width: 900px; margin: 40px auto; padding: 0 20px; }
+        h1, h2 { text-align: center; }
+        .card { background: #f9fafb; padding: 20px; border-radius: 8px; margin-bottom: 30px; border: 1px solid #e5e7eb; }
+        .row { display: flex; gap: 10px; margin-bottom: 10px; justify-content: center; }
+        input, select, button { padding: 8px; font-size: 15px; border: 1px solid #ccc; border-radius: 4px; }
+        button { background: #2563eb; color: white; border: none; cursor: pointer; }
+        button:hover { background: #1d4ed8; }
+        .chart-container { position: relative; height: 450px; width: 100%; margin-top: 20px; }
     </style>
 </head>
 <body>
 
-    <h1>Andamento ETF SWDA.MI</h1>
+    <h1>Dashboard Portafogli ETF</h1>
     
-    <label for="period">Seleziona Periodo:</label>
-    <select id="period" onchange="loadData()">
-        <option value="1mo">1 Mese</option>
-        <option value="6mo">6 Mesi</option>
-        <option value="1y" selected>1 Anno</option>
-        <option value="5y">5 Anni</option>
-        <option value="max">Tutto</option>
-    </select>
+    <div class="card">
+        <h2>Crea un nuovo Portafoglio</h2>
+        <div class="row">
+            <input type="text" id="portfolioName" placeholder="Nome Portafoglio (es. Sviluppo Globale)" style="width: 60%;">
+        </div>
+        
+        <div id="assetsContainer">
+            <div class="row asset-row">
+                <input type="text" class="ticker-input" placeholder="Ticker (es. SWDA.MI)">
+                <input type="number" class="weight-input" placeholder="Peso % (es. 60)">
+            </div>
+            <div class="row asset-row">
+                <input type="text" class="ticker-input" placeholder="Ticker (es. EIMI.MI)">
+                <input type="number" class="weight-input" placeholder="Peso % (es. 40)">
+            </div>
+        </div>
+        
+        <div class="row">
+            <button onclick="addAssetRow()">+ Aggiungi Strumento</button>
+            <button onclick="savePortfolio()" style="background: #10b981;">Salva Portafoglio</button>
+        </div>
+    </div>
 
-    <div class="chart-container">
-        <canvas id="etfChart"></canvas>
+    <div class="card" style="text-align: center;">
+        <label for="portfolioSelect"><strong>Seleziona Portafoglio:</strong></label>
+        <select id="portfolioSelect" onchange="loadPortfolioData()">
+            <option value="">-- Seleziona --</option>
+        </select>
+        
+        <div class="chart-container">
+            <canvas id="etfChart"></canvas>
+        </div>
     </div>
 
     <script>
         let myChart;
 
-        async function loadData() {
-            const period = document.getElementById('period').value;
-            const ticker = "SWDA.MI";
-            
-            try {
-                // MODIFICA CRITICA: Usa un URL relativo anziché hardcodare l'IP
-                const response = await fetch(`/api/v1/history/${ticker}?period=${period}`);
-                const result = await response.json();
-                
-                const labels = result.data.map(item => item.Date);
-                const prices = result.data.map(item => item.Close);
+        // Aggiunge una riga di input per i ticker
+        function addAssetRow() {
+            const container = document.getElementById('assetsContainer');
+            const row = document.createElement('div');
+            row.className = 'row asset-row';
+            row.innerHTML = `
+                <input type="text" class="ticker-input" placeholder="Ticker">
+                <input type="number" class="weight-input" placeholder="Peso %">
+            `;
+            container.appendChild(row);
+        }
 
-                renderChart(labels, prices, ticker);
-            } catch (error) {
-                console.error("Errore nel caricamento dati:", error);
-                alert("Impossibile caricare i dati.");
+        // Salva il portafoglio tramite API
+        async function savePortfolio() {
+            const name = document.getElementById('portfolioName').value;
+            if (!name) return alert("Inserisci un nome per il portafoglio");
+
+            const rows = document.querySelectorAll('.asset-row');
+            const assets = [];
+            let totalWeight = 0;
+
+            rows.forEach(row => {
+                const ticker = row.querySelector('.ticker-input').value.trim();
+                const weight = parseFloat(row.querySelector('.weight-input').value);
+                
+                if (ticker && !isNaN(weight)) {
+                    assets.push({ ticker: ticker, weight: weight });
+                    totalWeight += weight;
+                }
+            });
+
+            if (assets.length === 0) return alert("Inserisci almeno uno strumento");
+            if (totalWeight !== 100) return alert(`La somma dei pesi deve essere 100%. Attuale: ${totalWeight}%`);
+
+            try {
+                const res = await fetch('/api/v1/portfolios', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name: name, assets: assets })
+                });
+                
+                if (res.ok) {
+                    alert("Portafoglio salvato! Ricaricamento lista...");
+                    document.getElementById('portfolioName').value = '';
+                    fetchPortfoliosList();
+                } else {
+                    const err = await res.json();
+                    alert("Errore: " + err.detail);
+                }
+            } catch (e) {
+                console.error(e);
+                alert("Errore di connessione");
             }
         }
 
-        function renderChart(labels, prices, ticker) {
-            const ctx = document.getElementById('etfChart').getContext('2d');
+        // Popola la tendina dei portafogli
+        async function fetchPortfoliosList() {
+            const select = document.getElementById('portfolioSelect');
+            try {
+                const res = await fetch('/api/v1/portfolios');
+                const portfolios = await res.json();
+                
+                select.innerHTML = '<option value="">-- Seleziona --</option>';
+                portfolios.forEach(p => {
+                    const option = document.createElement('option');
+                    option.value = p;
+                    option.textContent = p;
+                    select.appendChild(option);
+                });
+            } catch (e) {
+                console.error("Errore nel caricamento dei portafogli", e);
+            }
+        }
+
+        // Carica e disegna i dati del portafoglio selezionato
+        async function loadPortfolioData() {
+            const name = document.getElementById('portfolioSelect').value;
+            if (!name) return;
             
-            if (myChart) { myChart.destroy(); } // Distruggi grafico precedente se esiste
+            try {
+                const response = await fetch(`/api/v1/portfolios/${name}/history`);
+                if (!response.ok) throw new Error("Errore nel fetch dati");
+                
+                const result = await response.json();
+                
+                const labels = result.data.map(item => item.Date);
+                const values = result.data.map(item => item.Value);
+
+                renderChart(labels, values, name);
+            } catch (error) {
+                console.error(error);
+                alert("Impossibile caricare i dati del portafoglio.");
+            }
+        }
+
+        function renderChart(labels, values, name) {
+            const ctx = document.getElementById('etfChart').getContext('2d');
+            if (myChart) { myChart.destroy(); } 
 
             myChart = new Chart(ctx, {
                 type: 'line',
                 data: {
                     labels: labels,
                     datasets: [{
-                        label: `Prezzo di Chiusura ${ticker} (€)`,
-                        data: prices,
-                        borderColor: '#2563eb',
-                        backgroundColor: 'rgba(37, 99, 235, 0.1)',
+                        label: `Crescita Portafoglio (Base 100) - ${name}`,
+                        data: values,
+                        borderColor: '#10b981',
+                        backgroundColor: 'rgba(16, 185, 129, 0.1)',
                         borderWidth: 2,
                         fill: true,
-                        pointRadius: 0 // Nasconde i punti per rendere la linea pulita
+                        pointRadius: 0
                     }]
                 },
                 options: {
@@ -79,8 +180,8 @@
             });
         }
 
-        // Caricamento iniziale
-        loadData();
+        // Inizializzazione
+        fetchPortfoliosList();
     </script>
 </body>
 </html>
