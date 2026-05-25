@@ -131,7 +131,14 @@
                 if (res.ok) {
                     alert("Portafoglio salvato! Ricaricamento lista...");
                     document.getElementById('portfolioName').value = '';
-                    fetchPortfoliosList();
+                    
+                    // Ricarica la lista e auto-seleziona il nuovo portafoglio
+                    await fetchPortfoliosList();
+                    
+                    // Auto-seleziona il portafoglio appena creato
+                    const select = document.getElementById('portfolioSelect');
+                    select.value = name;
+                    loadPortfolioData();
                 } else {
                     const err = await res.json();
                     alert("Errore: " + err.detail);
@@ -149,6 +156,9 @@
                 const res = await fetch('/api/v1/portfolios');
                 const portfolios = await res.json();
                 
+                // Salva il portafoglio attualmente selezionato
+                const currentSelection = select.value;
+                
                 select.innerHTML = '<option value="">-- Seleziona --</option>';
                 portfolios.forEach(p => {
                     const option = document.createElement('option');
@@ -156,6 +166,11 @@
                     option.textContent = p;
                     select.appendChild(option);
                 });
+                
+                // Ripristina la selezione precedente se esiste ancora
+                if (currentSelection && portfolios.includes(currentSelection)) {
+                    select.value = currentSelection;
+                }
             } catch (e) {
                 console.error("Errore nel caricamento dei portafogli", e);
             }
@@ -301,6 +316,9 @@
 
         // Inizializzazione
         fetchPortfoliosList();
+        
+        // Auto-refresh della lista dei portafogli ogni 10 secondi
+        setInterval(fetchPortfoliosList, 10000);
     </script>
 </body>
 </html>
