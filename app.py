@@ -9,9 +9,14 @@ import uvicorn
 import os
 import json
 import pandas as pd
+from pathlib import Path
 
 PORTFOLIOS_FILE = "portfolios.json"
 DATA_FILE = "market_data.json"
+ETF_CACHE_DIR = "etf_data"
+
+# Assicura che la cartella di cache esista
+Path(ETF_CACHE_DIR).mkdir(exist_ok=True)
 
 # --- Modelli Pydantic per il Portafoglio ---
 class Asset(BaseModel):
@@ -37,26 +42,68 @@ def load_portfolios():
             data = json.load(f)
             portfolios_db = {k: Portfolio(**v) for k, v in data.items()}
 
+def get_etf_cache_path(ticker: str) -> str:
+    """Ritorna il percorso del file di cache per un ETF"""
+    return os.path.join(ETF_CACHE_DIR, f"{ticker.upper()}.json")
+
+def etf_exists_locally(ticker: str) -> bool:
+    """Controlla se un ETF è già presente in cache locale"""
+    cache_path = get_etf_cache_path(ticker)
+    return os.path.exists(cache_path)
+
+def load_etf_from_cache(ticker: str) -> dict:
+    """Carica i dati di un ETF dalla cache locale"""
+    cache_path = get_etf_cache_path(ticker)
+    try:
+        with open(cache_path, "r") as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"Errore nel caricamento di {ticker} dalla cache: {e}")
+        return []
+
+def save_etf_to_cache(ticker: str, data: list):
+    """Salva i dati di un ETF nella cache locale"""
+    cache_path = get_etf_cache_path(ticker)
+    try:
+        with open(cache_path, "w") as f:
+            json.dump(data, f)
+        print(f"ETF {ticker} salvato in cache locale")
+    except Exception as e:
+        print(f"Errore nel salvataggio di {ticker}: {e}")
+
 def download_and_save_data(tickers: set):
-    """Scarica i dati da YF e li salva in locale"""
+    """Scarica i dati da YF e li salva in locale, verificando prima se già presenti"""
     global market_data
     
-    # Carica i dati esistenti se ci sono, per non sovrascrivere tutto se aggiungiamo 1 solo ticker
+    # Carica i dati esistenti se ci sono
     if os.path.exists(DATA_FILE):
         with open(DATA_FILE, "r") as f:
             market_data = json.load(f)
             
     for ticker in tickers:
-        print(f"Scaricamento dati per {ticker}...")
-        asset = yf.Ticker(ticker)
-        # Scarichiamo 5 anni di default per avere uno storico decente per i portafogli
-        hist = asset.history(period="5y") 
-        if not hist.empty:
-            hist.reset_index(inplace=True)
-            hist['Date'] = hist['Date'].dt.strftime('%Y-%m-%d')
-            market_data[ticker] = hist[['Date', 'Close']].to_dict(orient="records")
+        ticker_upper = ticker.upper()
+        
+        # Verifica se è già in cache locale
+        if etf_exists_locally(ticker_upper):
+            print(f"ETF {ticker_upper} trovato in cache locale. Caricamento...")
+            market_data[ticker_upper] = load_etf_from_cache(ticker_upper)
         else:
-            print(f"ATTENZIONE: Nessun dato trovato per {ticker}")
+            print(f"Scaricamento dati per {ticker_upper}...")
+            try:
+                asset = yf.Ticker(ticker_upper)
+                # Scarichiamo 5 anni di default per avere uno storico decente per i portafogli
+                hist = asset.history(period="5y") 
+                if not hist.empty:
+                    hist.reset_index(inplace=True)
+                    hist['Date'] = hist['Date'].dt.strftime('%Y-%m-%d')
+                    etf_data = hist[['Date', 'Close']].to_dict(orient="records")
+                    market_data[ticker_upper] = etf_data
+                    # Salva in cache locale
+                    save_etf_to_cache(ticker_upper, etf_data)
+                else:
+                    print(f"ATTENZIONE: Nessun dato trovato per {ticker_upper}")
+            except Exception as e:
+                print(f"Errore nello scaricamento di {ticker_upper}: {e}")
             
     with open(DATA_FILE, "w") as f:
         json.dump(market_data, f)
@@ -126,6 +173,60 @@ def create_portfolio(portfolio: Portfolio):
 @app.get("/api/v1/portfolios")
 def get_portfolios():
     return list(portfolios_db.keys())
+
+@app.get("/api/v1/etf-cache/status")
+def get_etf_cache_status():
+    """Ritorna lo stato della cache locale degli ETF"""
+    cached_etfs = []
+    if os.path.exists(ETF_CACHE_DIR):
+        for file in os.listdir(ETF_CACHE_DIR):
+            if file.endswith(".json"):
+                ticker = file.replace(".json", "")
+                cache_path = os.path.join(ETF_CACHE_DIR, file)
+                file_size = os.path.getsize(cache_path)
+                cached_etfs.append({
+                    "ticker": ticker,
+                    "cached": True,
+                    "file_size_bytes": file_size
+                })
+    return {"cached_etfs": cached_etfs, "total_cached": len(cached_etfs)}
+
+@app.post("/api/v1/etf-cache/clear/{ticker}")
+def clear_etf_cache(ticker: str):
+    """Rimuove un ETF dalla cache locale per forzare il download successivo"""
+    cache_path = get_etf_cache_path(ticker)
+    try:
+        if os.path.exists(cache_path):
+            os.remove(cache_path)
+            # Rimuove anche da market_data
+            ticker_upper = ticker.upper()
+            if ticker_upper in market_data:
+                del market_data[ticker_upper]
+            with open(DATA_FILE, "w") as f:
+                json.dump(market_data, f)
+            return {"message": f"Cache per {ticker} eliminata"}
+        else:
+            raise HTTPException(status_code=404, detail=f"ETF {ticker} non trovato in cache")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/v1/portfolios/{name}/composition")
+def get_portfolio_composition(name: str):
+    """Ritorna la composizione del portafoglio (ticker e pesi percentuali)"""
+    if name not in portfolios_db:
+        raise HTTPException(status_code=404, detail="Portafoglio non trovato")
+    
+    p = portfolios_db[name]
+    assets_detail = [
+        {"ticker": asset.ticker, "weight": asset.weight}
+        for asset in p.assets
+    ]
+    
+    return {
+        "portfolio": name,
+        "assets": assets_detail,
+        "total_weight": sum(a.weight for a in p.assets)
+    }
 
 @app.get("/api/v1/portfolios/{name}/history")
 def get_portfolio_history(name: str):
