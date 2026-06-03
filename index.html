@@ -33,14 +33,24 @@
             <input type="text" id="portfolioName" placeholder="Nome Portafoglio (es. Sviluppo Globale)" style="width: 60%;">
         </div>
         
+        <div class="row" style="margin-bottom: 15px;">
+            <label for="inputMode" style="line-height: 36px; margin-right: 10px;"><strong>Modalità Inserimento:</strong></label>
+            <select id="inputMode" onchange="toggleInputMode()">
+                <option value="percent">Percentuale (%)</option>
+                <option value="value">Valore Economico (€)</option>
+            </select>
+        </div>
+        
         <div id="assetsContainer">
             <div class="row asset-row">
                 <input type="text" class="ticker-input" placeholder="Ticker (es. SWDA.MI)">
                 <input type="number" class="weight-input" placeholder="Peso % (es. 60)">
+                <span class="calc-percent" style="display:none; line-height: 34px; margin-left: 10px; width: 60px; font-weight: bold; color: #2563eb;">0%</span>
             </div>
             <div class="row asset-row">
                 <input type="text" class="ticker-input" placeholder="Ticker (es. EIMI.MI)">
                 <input type="number" class="weight-input" placeholder="Peso % (es. 40)">
+                <span class="calc-percent" style="display:none; line-height: 34px; margin-left: 10px; width: 60px; font-weight: bold; color: #2563eb;">0%</span>
             </div>
         </div>
         
@@ -87,7 +97,16 @@
         let myChart;
         let compositionChart;
 
-        // Aggiunge una riga di input per i ticker
+        // --- NUOVO: Inizializzazione Session ID Isolata per la scheda del browser ---
+        if (!sessionStorage.getItem('etf_session_id')) {
+            const array = new Uint32Array(4);
+            window.crypto.getRandomValues(array);
+            const randomId = Array.from(array, dec => dec.toString(16).padStart(8, '0')).join('-');
+            sessionStorage.setItem('etf_session_id', randomId);
+        }
+        const sessionId = sessionStorage.getItem('etf_session_id');
+        // ----------------------------------------------------------------------------
+
         function addAssetRow() {
             const container = document.getElementById('assetsContainer');
             const row = document.createElement('div');
@@ -99,43 +118,73 @@
             container.appendChild(row);
         }
 
-        // Salva il portafoglio tramite API
+        // AGGIORNATO: Aggiunto l'header di sessione alla chiamata POST
+        // AGGIORNATO: Unisce la conversione Valore -> Percentuale con il Session ID
         async function savePortfolio() {
             const name = document.getElementById('portfolioName').value;
             if (!name) return alert("Inserisci un nome per il portafoglio");
 
+            // Recupera la modalità di input corrente
+            const mode = document.getElementById('inputMode') ? document.getElementById('inputMode').value : 'percent';
             const rows = document.querySelectorAll('.asset-row');
             const assets = [];
-            let totalWeight = 0;
+            let totalInput = 0;
 
+            // 1. Raccogli i valori inseriti (Euro o Percentuali)
             rows.forEach(row => {
                 const ticker = row.querySelector('.ticker-input').value.trim();
-                const weight = parseFloat(row.querySelector('.weight-input').value);
+                const val = parseFloat(row.querySelector('.weight-input').value);
                 
-                if (ticker && !isNaN(weight)) {
-                    assets.push({ ticker: ticker, weight: weight });
-                    totalWeight += weight;
+                if (ticker && !isNaN(val)) {
+                    assets.push({ ticker: ticker, rawValue: val });
+                    totalInput += val; // Capitale totale (se in €) o somma dei pesi (se in %)
                 }
             });
 
             if (assets.length === 0) return alert("Inserisci almeno uno strumento");
-            if (totalWeight !== 100) return alert(`La somma dei pesi deve essere 100%. Attuale: ${totalWeight}%`);
 
+            // 2. Calcola le distribuzioni percentuali da inviare al backend
+            let totalWeight = 0;
+            const finalAssets = assets.map(asset => {
+                let weight = asset.rawValue;
+                
+                // Se siamo in modalità economica, converti in percentuale (Base 100)
+                if (mode === 'value') {
+                    weight = (asset.rawValue / totalInput) * 100;
+                }
+                
+                weight = parseFloat(weight.toFixed(2)); // Arrotonda per l'API
+                totalWeight += weight;
+                
+                return { ticker: asset.ticker, weight: weight };
+            });
+
+            // 3. Controllo tollerante (100%) per evitare blocchi sui decimali
+            if (Math.abs(totalWeight - 100) > 0.1) {
+                return alert(`La somma dei pesi deve essere 100%. Attuale: ${totalWeight.toFixed(1)}%`);
+            }
+
+            // 4. Invio tramite API con header per l'isolamento sessione
             try {
                 const res = await fetch('/api/v1/portfolios', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ name: name, assets: assets })
+                    headers: { 
+                        'Content-Type': 'application/json',
+                        'X-Session-ID': sessionId // Identificativo della sessione corrente
+                    },
+                    body: JSON.stringify({ name: name, assets: finalAssets })
                 });
                 
                 if (res.ok) {
                     alert("Portafoglio salvato! Ricaricamento lista...");
+                    // Reset pulito dei campi
                     document.getElementById('portfolioName').value = '';
+                    document.querySelectorAll('.ticker-input').forEach(i => i.value = '');
+                    document.querySelectorAll('.weight-input').forEach(i => i.value = '');
+                    if(typeof updateCalculatedPercentages === 'function') updateCalculatedPercentages();
                     
-                    // Ricarica la lista e auto-seleziona il nuovo portafoglio
                     await fetchPortfoliosList();
                     
-                    // Auto-seleziona il portafoglio appena creato
                     const select = document.getElementById('portfolioSelect');
                     select.value = name;
                     loadPortfolioData();
@@ -149,14 +198,14 @@
             }
         }
 
-        // Popola la tendina dei portafogli
+        // AGGIORNATO: Aggiunto l'header di sessione alla chiamata GET lista portafogli
         async function fetchPortfoliosList() {
             const select = document.getElementById('portfolioSelect');
             try {
-                const res = await fetch('/api/v1/portfolios');
+                const res = await fetch('/api/v1/portfolios', {
+                    headers: { 'X-Session-ID': sessionId } // Filtra i portafogli per sessione
+                });
                 const portfolios = await res.json();
-                
-                // Salva il portafoglio attualmente selezionato
                 const currentSelection = select.value;
                 
                 select.innerHTML = '<option value="">-- Seleziona --</option>';
@@ -167,7 +216,6 @@
                     select.appendChild(option);
                 });
                 
-                // Ripristina la selezione precedente se esiste ancora
                 if (currentSelection && portfolios.includes(currentSelection)) {
                     select.value = currentSelection;
                 }
@@ -176,10 +224,12 @@
             }
         }
 
-        // Carica composizione del portafoglio
+        // AGGIORNATO: Aggiunto l'header di sessione alla chiamata GET composizione
         async function loadComposition(name) {
             try {
-                const response = await fetch(`/api/v1/portfolios/${name}/composition`);
+                const response = await fetch(`/api/v1/portfolios/${name}/composition`, {
+                    headers: { 'X-Session-ID': sessionId }
+                });
                 if (!response.ok) throw new Error("Errore nel fetch composizione");
                 
                 const result = await response.json();
@@ -190,67 +240,22 @@
             }
         }
 
-        // Renderizza la tabella di composizione
-        function renderComposition(assets) {
-            const table = document.getElementById('compositionTable');
-            let html = '<table><thead><tr><th>Ticker</th><th>Peso %</th></tr></thead><tbody>';
-            
-            assets.forEach(asset => {
-                html += `<tr><td><strong>${asset.ticker}</strong></td><td>${asset.weight}%</td></tr>`;
-            });
-            
-            html += '</tbody></table>';
-            table.innerHTML = html;
-        }
-
-        // Renderizza il grafico a torta della composizione
-        function renderCompositionChart(assets) {
-            const ctx = document.getElementById('compositionChart').getContext('2d');
-            if (compositionChart) { compositionChart.destroy(); }
-            
-            const colors = ['#2563eb', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4', '#ec4899', '#14b8a6'];
-            
-            compositionChart = new Chart(ctx, {
-                type: 'doughnut',
-                data: {
-                    labels: assets.map(a => a.ticker),
-                    datasets: [{
-                        data: assets.map(a => a.weight),
-                        backgroundColor: colors.slice(0, assets.length),
-                        borderColor: '#fff',
-                        borderWidth: 2
-                    }]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: true,
-                    plugins: {
-                        legend: {
-                            position: 'bottom'
-                        }
-                    }
-                }
-            });
-        }
-
-        // Carica e disegna i dati del portafoglio selezionato
+        // AGGIORNATO: Aggiunto l'header di sessione alla chiamata GET storico
         async function loadPortfolioData() {
             const name = document.getElementById('portfolioSelect').value;
             if (!name) return;
             
-            // Carica composizione
             loadComposition(name);
             
-            // Carica dati storici
             try {
-                const response = await fetch(`/api/v1/portfolios/${name}/history`);
+                const response = await fetch(`/api/v1/portfolios/${name}/history`, {
+                    headers: { 'X-Session-ID': sessionId }
+                });
                 if (!response.ok) throw new Error("Errore nel fetch dati");
                 
                 const result = await response.json();
-                
                 const labels = result.data.map(item => item.Date);
                 const values = result.data.map(item => item.Value);
-
                 renderChart(labels, values, name);
             } catch (error) {
                 console.error(error);
@@ -279,20 +284,45 @@
                 options: {
                     responsive: true,
                     maintainAspectRatio: false,
-                    scales: {
-                        x: { grid: { display: false } },
-                        y: { beginAtZero: false }
-                    }
+                    scales: { x: { grid: { display: false } }, y: { beginAtZero: false } }
                 }
             });
         }
 
-        // Verifica lo stato della cache locale degli ETF
+        function renderComposition(assets) {
+            const table = document.getElementById('compositionTable');
+            let html = '<table><thead><tr><th>Ticker</th><th>Peso %</th></tr></thead><tbody>';
+            assets.forEach(asset => {
+                html += `<tr><td><strong>${asset.ticker}</strong></td><td>${asset.weight}%</td></tr>`;
+            });
+            html += '</tbody></table>';
+            table.innerHTML = html;
+        }
+
+        function renderCompositionChart(assets) {
+            const ctx = document.getElementById('compositionChart').getContext('2d');
+            if (compositionChart) { compositionChart.destroy(); }
+            const colors = ['#2563eb', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4', '#ec4899', '#14b8a6'];
+            
+            compositionChart = new Chart(ctx, {
+                type: 'doughnut',
+                data: {
+                    labels: assets.map(a => a.ticker),
+                    datasets: [{
+                        data: assets.map(a => a.weight),
+                        backgroundColor: colors.slice(0, assets.length),
+                        borderColor: '#fff',
+                        borderWidth: 2
+                    }]
+                },
+                options: { responsive: true, plugins: { legend: { position: 'bottom' } } }
+            });
+        }
+
         async function checkCacheStatus() {
             try {
                 const response = await fetch('/api/v1/etf-cache/status');
                 if (!response.ok) throw new Error("Errore nel fetch status");
-                
                 const result = await response.json();
                 const statusDiv = document.getElementById('cacheStatus');
                 
@@ -308,16 +338,11 @@
                     statusDiv.innerHTML = html;
                 }
             } catch (error) {
-                console.error(error);
-                document.getElementById('cacheStatus').innerHTML = 
-                    '<p style="color: red;">Errore nel caricamento dello stato cache</p>';
+                document.getElementById('cacheStatus').innerHTML = '<p style="color: red;">Errore nel caricamento cache</p>';
             }
         }
 
-        // Inizializzazione
         fetchPortfoliosList();
-        
-        // Auto-refresh della lista dei portafogli ogni 10 secondi
         setInterval(fetchPortfoliosList, 10000);
     </script>
 </body>
