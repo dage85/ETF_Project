@@ -57,11 +57,13 @@
                     <input type="text" class="ticker-input" placeholder="Ticker (es. SWDA.MI)">
                     <input type="number" class="weight-input" placeholder="Peso % (es. 60)">
                     <span class="calc-percent" style="display:none; line-height: 34px; margin-left: 10px; width: 60px; font-weight: bold; color: #2563eb;">0%</span>
+                    <button type="button" onclick="removeAssetRow(this)" style="background: #ef4444; margin-left: 10px;" title="Rimuovi">❌</button>
                 </div>
                 <div class="row asset-row">
                     <input type="text" class="ticker-input" placeholder="Ticker (es. EIMI.MI)">
                     <input type="number" class="weight-input" placeholder="Peso % (es. 40)">
                     <span class="calc-percent" style="display:none; line-height: 34px; margin-left: 10px; width: 60px; font-weight: bold; color: #2563eb;">0%</span>
+                    <button type="button" onclick="removeAssetRow(this)" style="background: #ef4444; margin-left: 10px;" title="Rimuovi">❌</button>
                 </div>
             </div>
         
@@ -147,8 +149,28 @@
             row.innerHTML = `
                 <input type="text" class="ticker-input" placeholder="Ticker">
                 <input type="number" class="weight-input" placeholder="Peso %">
+                <span class="calc-percent" style="display:none; line-height: 34px; margin-left: 10px; width: 60px; font-weight: bold; color: #2563eb;">0%</span>
+                <button type="button" onclick="removeAssetRow(this)" style="background: #ef4444; margin-left: 10px;" title="Rimuovi">❌</button>
             `;
             container.appendChild(row);
+        }
+
+        // Nuova funzione per rimuovere la riga
+        function removeAssetRow(btn) {
+            const container = document.getElementById('assetsContainer');
+            const rows = container.querySelectorAll('.asset-row');
+            
+            // Assicuriamoci che ci sia almeno una riga nel form
+            if (rows.length > 1) {
+                btn.parentElement.remove(); // Rimuove il div .asset-row
+                
+                // Se hai una funzione che ricalcola le % (opzionale), chiamala qui
+                if (typeof updateCalculatedPercentages === 'function') {
+                    updateCalculatedPercentages();
+                }
+            } else {
+                alert("Il portafoglio deve contenere almeno un asset.");
+            }
         }
 
         // AGGIORNATO: Aggiunto l'header di sessione alla chiamata POST
@@ -268,6 +290,10 @@
                 const result = await response.json();
                 renderComposition(result.assets);
                 renderCompositionChart(result.assets);
+                
+                // NUOVO: Copia i dati del portafoglio selezionato nella sezione di Modifica/Creazione
+                populateEditForm(name, result.assets);
+                
             } catch (error) {
                 console.error(error);
             }
@@ -489,6 +515,45 @@
             
             // Legge il file come testo
             reader.readAsText(file);
+        }
+
+        function populateEditForm(name, assets) {
+            // 1. Ripristina il nome del portafoglio nell'input di testo
+            document.getElementById('portfolioName').value = name;
+            
+            // 2. Seleziona il contenitore dei ticker e svuotalo completamente
+            const container = document.getElementById('assetsContainer');
+            container.innerHTML = '';
+            
+            // 3. Ripristina la modalità di input su "Percentuale (%)"
+            const inputMode = document.getElementById('inputMode');
+            if (inputMode) {
+                inputMode.value = 'percent';
+                if (typeof toggleInputMode === 'function') {
+                    toggleInputMode();
+                }
+            }
+            
+            // 4. Cicla sugli asset del portafoglio e rigenera le righe includendo il pulsante di rimozione
+            assets.forEach(asset => {
+                const row = document.createElement('div');
+                row.className = 'row asset-row';
+                
+                // Costruiamo l'HTML includendo sia i valori precompilati che il pulsante ❌ con la funzione removeAssetRow
+                row.innerHTML = `
+                    <input type="text" class="ticker-input" value="${asset.ticker}" placeholder="Ticker (es. SWDA.MI)">
+                    <input type="number" class="weight-input" value="${asset.weight}" placeholder="Peso % (es. 60)">
+                    <span class="calc-percent" style="display:none; line-height: 34px; margin-left: 10px; width: 60px; font-weight: bold; color: #2563eb;">0%</span>
+                    <button type="button" onclick="removeAssetRow(this)" style="background: #ef4444; margin-left: 10px;" title="Rimuovi">❌</button>
+                `;
+                
+                container.appendChild(row);
+            });
+            
+            // 5. Forza l'aggiornamento dei calcoli visivi se la funzione esiste
+            if (typeof updateCalculatedPercentages === 'function') {
+                updateCalculatedPercentages();
+            }
         }
         
     </script>
