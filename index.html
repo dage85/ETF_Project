@@ -21,6 +21,11 @@
         th { background: #f3f4f6; font-weight: bold; color: #374151; }
         tr:hover { background: #f9fafb; }
         td:nth-child(2) { text-align: right; font-weight: bold; color: #2563eb; }
+        
+        /* Stili aggiunti per il benchmark */
+        .bench-td { text-align: right; font-weight: 500; font-family: monospace; font-size: 14px; }
+        .bench-better { color: #10b981; font-weight: bold; } /* Verde scuro */
+        .bench-worse { color: #ef4444; } /* Rosso scuro */
     </style>
 </head>
 <body>
@@ -117,22 +122,46 @@
         </div>
     </div>
 
-<!--
-    <div class="card">
-        <h2>Cache ETF Locale</h2>
-        <button onclick="checkCacheStatus()" style="background: #6366f1; margin-bottom: 15px;">Verifica Cache</button>
-        <div id="cacheStatus" style="text-align: left; background: white; padding: 15px; border-radius: 4px; border: 1px solid #ddd;">
-            <p><em>Clicca su "Verifica Cache" per vedere gli ETF salvati localmente</em></p>
+    <div class="card" style="text-align: center;">
+        <h2>⚖️ Analisi e Benchmark</h2>
+        <p style="font-size: 14px; color: #6b7280; margin-bottom: 20px;">Confronta le performance e la solidità di due strategie sullo stesso periodo temporale storico in comune. I valori evidenziati in verde indicano il portafoglio dominante per l'indicatore specifico.</p>
+        
+        <div style="display: flex; gap: 20px; justify-content: center; align-items: center; margin-bottom: 20px; flex-wrap: wrap;">
+            <div>
+                <label for="benchSelect1"><strong>Portafoglio 1:</strong></label><br>
+                <select id="benchSelect1" style="min-width: 150px; margin-top: 5px;">
+                    <option value="">-- Seleziona --</option>
+                </select>
+            </div>
+            <div style="font-size: 24px; font-weight: bold; color: #9ca3af; margin-top: 15px;">VS</div>
+            <div>
+                <label for="benchSelect2"><strong>Portafoglio 2:</strong></label><br>
+                <select id="benchSelect2" style="min-width: 150px; margin-top: 5px;">
+                    <option value="">-- Seleziona --</option>
+                </select>
+            </div>
+        </div>
+        
+        <button onclick="runBenchmark()" style="background: #8b5cf6; padding: 10px 20px; font-weight: bold;">Esegui Benchmark</button>
+
+        <div id="benchmarkResults" style="margin-top: 25px; display: none;">
+            <table style="width: 100%; border-collapse: collapse; background: white; border: 1px solid #e5e7eb; border-radius: 4px; overflow: hidden;">
+                <thead>
+                    <tr>
+                        <th style="text-align: left; background: #f3f4f6; padding: 12px;">Indicatore Statistico</th>
+                        <th id="benchName1" style="text-align: right; background: #f3f4f6; color: #1f2937; padding: 12px; font-size: 16px;">Portafoglio 1</th>
+                        <th id="benchName2" style="text-align: right; background: #f3f4f6; color: #1f2937; padding: 12px; font-size: 16px;">Portafoglio 2</th>
+                    </tr>
+                </thead>
+                <tbody id="benchTableBody">
+                    </tbody>
+            </table>
         </div>
     </div>
--->
-
-
     <script>
         let myChart;
         let compositionChart;
 
-        // --- NUOVO: Inizializzazione Session ID Isolata per la scheda del browser ---
         if (!sessionStorage.getItem('etf_session_id')) {
             const array = new Uint32Array(4);
             window.crypto.getRandomValues(array);
@@ -140,7 +169,6 @@
             sessionStorage.setItem('etf_session_id', randomId);
         }
         const sessionId = sessionStorage.getItem('etf_session_id');
-        // ----------------------------------------------------------------------------
 
         function addAssetRow() {
             const container = document.getElementById('assetsContainer');
@@ -155,93 +183,71 @@
             container.appendChild(row);
         }
 
-        // Nuova funzione per rimuovere la riga
         function removeAssetRow(btn) {
             const container = document.getElementById('assetsContainer');
             const rows = container.querySelectorAll('.asset-row');
-            
-            // Assicuriamoci che ci sia almeno una riga nel form
             if (rows.length > 1) {
-                btn.parentElement.remove(); // Rimuove il div .asset-row
-                
-                // Se hai una funzione che ricalcola le % (opzionale), chiamala qui
-                if (typeof updateCalculatedPercentages === 'function') {
-                    updateCalculatedPercentages();
-                }
+                btn.parentElement.remove();
             } else {
                 alert("Il portafoglio deve contenere almeno un asset.");
             }
         }
 
-        // AGGIORNATO: Aggiunto l'header di sessione alla chiamata POST
-        // AGGIORNATO: Unisce la conversione Valore -> Percentuale con il Session ID
         async function savePortfolio() {
             const name = document.getElementById('portfolioName').value;
             if (!name) return alert("Inserisci un nome per il portafoglio");
 
-            // Recupera la modalità di input corrente
             const mode = document.getElementById('inputMode') ? document.getElementById('inputMode').value : 'percent';
             const rows = document.querySelectorAll('.asset-row');
             const assets = [];
             let totalInput = 0;
 
-            // 1. Raccogli i valori inseriti (Euro o Percentuali)
             rows.forEach(row => {
                 const ticker = row.querySelector('.ticker-input').value.trim();
                 const val = parseFloat(row.querySelector('.weight-input').value);
                 
                 if (ticker && !isNaN(val)) {
                     assets.push({ ticker: ticker, rawValue: val });
-                    totalInput += val; // Capitale totale (se in €) o somma dei pesi (se in %)
+                    totalInput += val;
                 }
             });
 
             if (assets.length === 0) return alert("Inserisci almeno uno strumento");
 
-            // 2. Calcola le distribuzioni percentuali da inviare al backend
             let totalWeight = 0;
             const finalAssets = assets.map(asset => {
                 let weight = asset.rawValue;
-                
-                // Se siamo in modalità economica, converti in percentuale (Base 100)
                 if (mode === 'value') {
                     weight = (asset.rawValue / totalInput) * 100;
                 }
-                
-                weight = parseFloat(weight.toFixed(2)); // Arrotonda per l'API
+                weight = parseFloat(weight.toFixed(2));
                 totalWeight += weight;
-                
                 return { ticker: asset.ticker, weight: weight };
             });
 
-            // 3. Controllo tollerante (100%) per evitare blocchi sui decimali
             if (Math.abs(totalWeight - 100) > 0.1) {
                 return alert(`La somma dei pesi deve essere 100%. Attuale: ${totalWeight.toFixed(1)}%`);
             }
 
-            // 4. Invio tramite API con header per l'isolamento sessione
             try {
                 const res = await fetch('/api/v1/portfolios', {
                     method: 'POST',
                     headers: { 
                         'Content-Type': 'application/json',
-                        'X-Session-ID': sessionId // Identificativo della sessione corrente
+                        'X-Session-ID': sessionId 
                     },
                     body: JSON.stringify({ name: name, assets: finalAssets })
                 });
                 
                 if (res.ok) {
                     alert("Portafoglio salvato! Ricaricamento lista...");
-                    // Reset pulito dei campi
                     document.getElementById('portfolioName').value = '';
                     document.querySelectorAll('.ticker-input').forEach(i => i.value = '');
                     document.querySelectorAll('.weight-input').forEach(i => i.value = '');
-                    if(typeof updateCalculatedPercentages === 'function') updateCalculatedPercentages();
                     
                     await fetchPortfoliosList();
                     
-                    const select = document.getElementById('portfolioSelect');
-                    select.value = name;
+                    document.getElementById('portfolioSelect').value = name;
                     loadPortfolioData();
                 } else {
                     const err = await res.json();
@@ -253,33 +259,41 @@
             }
         }
 
-        // AGGIORNATO: Aggiunto l'header di sessione alla chiamata GET lista portafogli
+        // AGGIORNATO: Popola anche le select del nuovo Benchmark Tab
         async function fetchPortfoliosList() {
             const select = document.getElementById('portfolioSelect');
+            const bench1 = document.getElementById('benchSelect1');
+            const bench2 = document.getElementById('benchSelect2');
+            
             try {
                 const res = await fetch('/api/v1/portfolios', {
-                    headers: { 'X-Session-ID': sessionId } // Filtra i portafogli per sessione
+                    headers: { 'X-Session-ID': sessionId }
                 });
                 const portfolios = await res.json();
-                const currentSelection = select.value;
                 
-                select.innerHTML = '<option value="">-- Seleziona --</option>';
+                // Conserva selezioni attuali per non resettarle al refresh
+                const currentSelection = select.value;
+                const currentB1 = bench1 ? bench1.value : '';
+                const currentB2 = bench2 ? bench2.value : '';
+                
+                let options = '<option value="">-- Seleziona --</option>';
                 portfolios.forEach(p => {
-                    const option = document.createElement('option');
-                    option.value = p;
-                    option.textContent = p;
-                    select.appendChild(option);
+                    options += `<option value="${p}">${p}</option>`;
                 });
                 
-                if (currentSelection && portfolios.includes(currentSelection)) {
-                    select.value = currentSelection;
-                }
+                select.innerHTML = options;
+                if(bench1) bench1.innerHTML = options;
+                if(bench2) bench2.innerHTML = options;
+                
+                if (currentSelection && portfolios.includes(currentSelection)) select.value = currentSelection;
+                if (currentB1 && portfolios.includes(currentB1)) bench1.value = currentB1;
+                if (currentB2 && portfolios.includes(currentB2)) bench2.value = currentB2;
+                
             } catch (e) {
                 console.error("Errore nel caricamento dei portafogli", e);
             }
         }
 
-        // AGGIORNATO: Aggiunto l'header di sessione alla chiamata GET composizione
         async function loadComposition(name) {
             try {
                 const response = await fetch(`/api/v1/portfolios/${name}/composition`, {
@@ -290,16 +304,12 @@
                 const result = await response.json();
                 renderComposition(result.assets);
                 renderCompositionChart(result.assets);
-                
-                // NUOVO: Copia i dati del portafoglio selezionato nella sezione di Modifica/Creazione
                 populateEditForm(name, result.assets);
-                
             } catch (error) {
                 console.error(error);
             }
         }
 
-        // AGGIORNATO: Aggiunto l'header di sessione alla chiamata GET storico
         async function loadPortfolioData() {
             const name = document.getElementById('portfolioSelect').value;
             if (!name) return;
@@ -321,6 +331,85 @@
                 alert("Impossibile caricare i dati del portafoglio.");
             }
         }
+
+        // --- NUOVO: Logica Benchmark Frontend ---
+        async function runBenchmark() {
+            const p1 = document.getElementById('benchSelect1').value;
+            const p2 = document.getElementById('benchSelect2').value;
+
+            if (!p1 || !p2) {
+                alert("Per favore, seleziona due portafogli da confrontare.");
+                return;
+            }
+            if (p1 === p2) {
+                alert("Seleziona due portafogli diversi per eseguire il benchmark.");
+                return;
+            }
+
+            try {
+                const response = await fetch(`/api/v1/benchmark?p1=${encodeURIComponent(p1)}&p2=${encodeURIComponent(p2)}`, {
+                    headers: { 'X-Session-ID': sessionId }
+                });
+                
+                if (!response.ok) {
+                    const err = await response.json();
+                    throw new Error(err.detail || "Errore durante l'esecuzione del benchmark.");
+                }
+
+                const data = await response.json();
+                document.getElementById('benchName1').textContent = data.p1_name;
+                document.getElementById('benchName2').textContent = data.p2_name;
+
+                const tbody = document.getElementById('benchTableBody');
+                tbody.innerHTML = '';
+
+                data.metrics.forEach(metric => {
+                    const tr = document.createElement('tr');
+                    
+                    const tdMetric = document.createElement('td');
+                    tdMetric.innerHTML = `<strong>${metric}</strong>`;
+                    tdMetric.style.padding = "10px";
+                    
+                    const td1 = document.createElement('td');
+                    td1.textContent = data.p1_results[metric] || "N/A";
+                    td1.className = "bench-td";
+                    
+                    const td2 = document.createElement('td');
+                    td2.textContent = data.p2_results[metric] || "N/A";
+                    td2.className = "bench-td";
+
+                    // Highlight Colori Intelligente (Verde=Migliore, Rosso=Peggiore)
+                    const val1 = parseFloat(data.p1_results[metric]);
+                    const val2 = parseFloat(data.p2_results[metric]);
+
+                    // Per tutti gli indicatori un valore maggiore/meno negativo è migliore, TRANNE per la Volatilità
+                    const higherIsBetter = (metric !== 'Volatility'); 
+
+                    if (!isNaN(val1) && !isNaN(val2) && val1 !== val2) {
+                        const p1IsBetter = higherIsBetter ? (val1 > val2) : (val1 < val2);
+                        if (p1IsBetter) {
+                            td1.classList.add("bench-better");
+                            td2.classList.add("bench-worse");
+                        } else {
+                            td2.classList.add("bench-better");
+                            td1.classList.add("bench-worse");
+                        }
+                    }
+
+                    tr.appendChild(tdMetric);
+                    tr.appendChild(td1);
+                    tr.appendChild(td2);
+                    tbody.appendChild(tr);
+                });
+
+                document.getElementById('benchmarkResults').style.display = 'block';
+
+            } catch (e) {
+                console.error(e);
+                alert(e.message);
+            }
+        }
+        // ----------------------------------------
 
         function renderChart(labels, values, name) {
             const ctx = document.getElementById('etfChart').getContext('2d');
@@ -378,33 +467,9 @@
             });
         }
 
-        async function checkCacheStatus() {
-            try {
-                const response = await fetch('/api/v1/etf-cache/status');
-                if (!response.ok) throw new Error("Errore nel fetch status");
-                const result = await response.json();
-                const statusDiv = document.getElementById('cacheStatus');
-                
-                if (result.cached_etfs.length === 0) {
-                    statusDiv.innerHTML = '<p style="color: #666;"><strong>Nessun ETF in cache locale</strong></p>';
-                } else {
-                    let html = `<p><strong>ETF in cache locale (${result.total_cached}):</strong></p><ul style="margin: 10px 0;">`;
-                    result.cached_etfs.forEach(etf => {
-                        const sizeMB = (etf.file_size_bytes / 1024).toFixed(2);
-                        html += `<li><strong>${etf.ticker}</strong> - ${sizeMB} KB</li>`;
-                    });
-                    html += '</ul>';
-                    statusDiv.innerHTML = html;
-                }
-            } catch (error) {
-                document.getElementById('cacheStatus').innerHTML = '<p style="color: red;">Errore nel caricamento cache</p>';
-            }
-        }
-
         fetchPortfoliosList();
         setInterval(fetchPortfoliosList, 10000);
 
-        // --- FUNZIONE PER SWITCHARE I TAB SUPERIORI ---
         function switchPortfolioTab(tab) {
             const tabCreate = document.getElementById('tabContentCreate');
             const tabIO = document.getElementById('tabContentIO');
@@ -412,21 +477,15 @@
             const btnIO = document.getElementById('btnTabIO');
 
             if (tab === 'create') {
-                // Mostra Creazione, Nascondi Import/Export
                 tabCreate.style.display = 'block';
                 tabIO.style.display = 'none';
-                
-                // Aggiorna gli stili dei pulsanti (Attivo / Inattivo)
                 btnCreate.style.background = '#2563eb';
                 btnCreate.style.color = 'white';
                 btnIO.style.background = '#f3f4f6';
                 btnIO.style.color = '#4b5563';
             } else if (tab === 'io') {
-                // Mostra Import/Export, Nascondi Creazione
                 tabCreate.style.display = 'none';
                 tabIO.style.display = 'block';
-                
-                // Aggiorna gli stili dei pulsanti (Inattivo / Attivo)
                 btnCreate.style.background = '#f3f4f6';
                 btnCreate.style.color = '#4b5563';
                 btnIO.style.background = '#2563eb';
@@ -439,123 +498,75 @@
                 const response = await fetch('/api/v1/portfolios/export', {
                     headers: { 'X-Session-ID': sessionId }
                 });
-                
-                if (!response.ok) {
-                    const err = await response.json();
-                    throw new Error(err.detail || "Errore API");
-                }
-                
+                if (!response.ok) throw new Error(await response.json().detail || "Errore API");
                 const data = await response.json();
-                if (Object.keys(data).length === 0) {
-                    alert("Nessun portafoglio da esportare nella sessione corrente.");
-                    return;
-                }
+                if (Object.keys(data).length === 0) return alert("Nessun portafoglio da esportare.");
                 
-                // Creazione del file tramite Blob (molto più sicuro del Data URI)
                 const jsonString = JSON.stringify(data, null, 2);
                 const blob = new Blob([jsonString], { type: "application/json" });
                 const url = URL.createObjectURL(blob);
-                
                 const downloadAnchorNode = document.createElement('a');
                 downloadAnchorNode.href = url;
                 downloadAnchorNode.download = "miei_portafogli_etf.json";
-                
-                // Simula il click per avviare il download
                 document.body.appendChild(downloadAnchorNode); 
                 downloadAnchorNode.click();
-                
-                // Pulizia della memoria e rimozione del nodo
                 document.body.removeChild(downloadAnchorNode);
                 URL.revokeObjectURL(url);
-                
             } catch (e) {
                 console.error("Dettagli errore export:", e);
-                alert("Errore durante l'esportazione. Controlla la console del browser per i dettagli.");
+                alert("Errore durante l'esportazione.");
             }
         }
 
         async function importPortfolios() {
             const fileInput = document.getElementById('importFileInput');
-            if (!fileInput.files.length) {
-                alert("Seleziona un file JSON da importare.");
-                return;
-            }
-            
+            if (!fileInput.files.length) return alert("Seleziona un file JSON da importare.");
             const file = fileInput.files[0];
             const reader = new FileReader();
-            
-            // Quando il file è stato letto
             reader.onload = async function(e) {
                 try {
                     const importedData = JSON.parse(e.target.result);
-                    
                     const response = await fetch('/api/v1/portfolios/import', {
                         method: 'POST',
-                        headers: { 
-                            'Content-Type': 'application/json',
-                            'X-Session-ID': sessionId 
-                        },
+                        headers: { 'Content-Type': 'application/json', 'X-Session-ID': sessionId },
                         body: JSON.stringify(importedData)
                     });
-                    
                     if (response.ok) {
-                        const result = await response.json();
-                        alert(result.message);
-                        fetchPortfoliosList(); // Aggiorna il menu a tendina
-                        fileInput.value = ""; // Resetta l'input file
+                        alert((await response.json()).message);
+                        fetchPortfoliosList();
+                        fileInput.value = "";
                     } else {
-                        const err = await response.json();
-                        alert("Errore importazione: Formato non valido (" + err.detail + ")");
+                        alert("Errore importazione: Formato non valido.");
                     }
                 } catch (err) {
-                    console.error(err);
                     alert("Errore: Il file selezionato non è un JSON valido.");
                 }
             };
-            
-            // Legge il file come testo
             reader.readAsText(file);
         }
 
         function populateEditForm(name, assets) {
-            // 1. Ripristina il nome del portafoglio nell'input di testo
             document.getElementById('portfolioName').value = name;
-            
-            // 2. Seleziona il contenitore dei ticker e svuotalo completamente
             const container = document.getElementById('assetsContainer');
             container.innerHTML = '';
             
-            // 3. Ripristina la modalità di input su "Percentuale (%)"
             const inputMode = document.getElementById('inputMode');
             if (inputMode) {
                 inputMode.value = 'percent';
-                if (typeof toggleInputMode === 'function') {
-                    toggleInputMode();
-                }
             }
             
-            // 4. Cicla sugli asset del portafoglio e rigenera le righe includendo il pulsante di rimozione
             assets.forEach(asset => {
                 const row = document.createElement('div');
                 row.className = 'row asset-row';
-                
-                // Costruiamo l'HTML includendo sia i valori precompilati che il pulsante ❌ con la funzione removeAssetRow
                 row.innerHTML = `
                     <input type="text" class="ticker-input" value="${asset.ticker}" placeholder="Ticker (es. SWDA.MI)">
                     <input type="number" class="weight-input" value="${asset.weight}" placeholder="Peso % (es. 60)">
                     <span class="calc-percent" style="display:none; line-height: 34px; margin-left: 10px; width: 60px; font-weight: bold; color: #2563eb;">0%</span>
                     <button type="button" onclick="removeAssetRow(this)" style="background: #ef4444; margin-left: 10px;" title="Rimuovi">❌</button>
                 `;
-                
                 container.appendChild(row);
             });
-            
-            // 5. Forza l'aggiornamento dei calcoli visivi se la funzione esiste
-            if (typeof updateCalculatedPercentages === 'function') {
-                updateCalculatedPercentages();
-            }
         }
-        
     </script>
 </body>
 </html>
