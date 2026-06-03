@@ -26,40 +26,70 @@
 <body>
 
     <h1>Dashboard Portafogli ETF</h1>
-    
-    <div class="card">
-        <h2>Crea un nuovo Portafoglio</h2>
-        <div class="row">
-            <input type="text" id="portfolioName" placeholder="Nome Portafoglio (es. Sviluppo Globale)" style="width: 60%;">
+
+    <div class="card" style="margin-bottom: 25px;">
+        <div style="display: flex; gap: 10px; margin-bottom: 20px; border-bottom: 2px solid #e5e7eb; padding-bottom: 10px;">
+            <button id="btnTabCreate" onclick="switchPortfolioTab('create')" style="background: #2563eb; color: white; padding: 10px 20px; border-radius: 6px; cursor: pointer; border: none; font-weight: bold;">
+                ➕ Crea / Modifica Portafoglio
+            </button>
+            <button id="btnTabIO" onclick="switchPortfolioTab('io')" style="background: #f3f4f6; color: #4b5563; padding: 10px 20px; border-radius: 6px; cursor: pointer; border: none; font-weight: bold;">
+                🔄 Importa / Esporta JSON
+            </button>
         </div>
-        
-        <div class="row" style="margin-bottom: 15px;">
-            <label for="inputMode" style="line-height: 36px; margin-right: 10px;"><strong>Modalità Inserimento:</strong></label>
-            <select id="inputMode" onchange="toggleInputMode()">
-                <option value="percent">Percentuale (%)</option>
-                <option value="value">Valore Economico (€)</option>
-            </select>
-        </div>
-        
-        <div id="assetsContainer">
-            <div class="row asset-row">
-                <input type="text" class="ticker-input" placeholder="Ticker (es. SWDA.MI)">
-                <input type="number" class="weight-input" placeholder="Peso % (es. 60)">
-                <span class="calc-percent" style="display:none; line-height: 34px; margin-left: 10px; width: 60px; font-weight: bold; color: #2563eb;">0%</span>
+
+        <div id="tabContentCreate" style="text-align: center;">
+            <h2>Crea o Modifica Portafoglio</h2>
+            <div class="form-group">
+                <label for="portfolioName">Nome Portafoglio:</label>
+                <input type="text" id="portfolioName" placeholder="Es. MioPortafoglio">
             </div>
-            <div class="row asset-row">
-                <input type="text" class="ticker-input" placeholder="Ticker (es. EIMI.MI)">
-                <input type="number" class="weight-input" placeholder="Peso % (es. 40)">
-                <span class="calc-percent" style="display:none; line-height: 34px; margin-left: 10px; width: 60px; font-weight: bold; color: #2563eb;">0%</span>
+
+            <div class="row" style="margin-bottom: 15px; margin-top: 15px;">
+                <label for="inputMode" style="line-height: 36px; margin-right: 10px; "><strong>Modalità Inserimento:</strong></label>
+                <select id="inputMode" onchange="toggleInputMode()">
+                    <option value="percent">Percentuale (%)</option>
+                    <option value="value">Valore Economico (€)</option>
+                </select>
+            </div>
+        
+            <div id="assetsContainer">
+                <div class="row asset-row">
+                    <input type="text" class="ticker-input" placeholder="Ticker (es. SWDA.MI)">
+                    <input type="number" class="weight-input" placeholder="Peso % (es. 60)">
+                    <span class="calc-percent" style="display:none; line-height: 34px; margin-left: 10px; width: 60px; font-weight: bold; color: #2563eb;">0%</span>
+                </div>
+                <div class="row asset-row">
+                    <input type="text" class="ticker-input" placeholder="Ticker (es. EIMI.MI)">
+                    <input type="number" class="weight-input" placeholder="Peso % (es. 40)">
+                    <span class="calc-percent" style="display:none; line-height: 34px; margin-left: 10px; width: 60px; font-weight: bold; color: #2563eb;">0%</span>
+                </div>
+            </div>
+        
+            <div style="margin-top: 10px; display: flex; gap: 10px; text-align: center; align-items:center; justify-content: center;">
+                <button onclick="addAssetRow()" style="background: #10b981; text-align: center;">+ Aggiungi Asset</button>
+                <button onclick="savePortfolio()" style="background: #2563eb; text-align: center;">Salva Portafoglio</button>
             </div>
         </div>
-        
-        <div class="row">
-            <button onclick="addAssetRow()">+ Aggiungi Strumento</button>
-            <button onclick="savePortfolio()" style="background: #10b981;">Salva Portafoglio</button>
+
+        <div id="tabContentIO" style="display: none;">
+            <h2>Importa / Esporta Portafogli</h2>
+            <div style="display: flex; gap: 20px; align-items: center; flex-wrap: wrap;">
+                <div style="flex: 1; min-width: 250px; padding: 15px; border: 1px dashed #ccc; border-radius: 8px;">
+                    <h3 style="margin-top: 0;">Esporta Dati</h3>
+                    <p style="font-size: 14px; color: #555;">Scarica tutti i portafogli salvati nella sessione in un file JSON.</p>
+                    <button onclick="exportPortfolios()" style="background: #8b5cf6; width: 100%;">Esporta Portafogli (JSON)</button>
+                </div>
+                
+                <div style="flex: 1; min-width: 250px; padding: 15px; border: 1px dashed #ccc; border-radius: 8px;">
+                    <h3 style="margin-top: 0;">Importa Dati</h3>
+                    <p style="font-size: 14px; color: #555;">Carica un file JSON con più portafogli.</p>
+                    <input type="file" id="importFileInput" accept=".json" style="width: 100%; box-sizing: border-box; margin-bottom: 10px;">
+                    <button onclick="importPortfolios()" style="background: #f59e0b; width: 100%;">Importa Portafogli</button>
+                </div>
+            </div>
         </div>
     </div>
-
+    
     <div class="card" style="text-align: center;">
         <label for="portfolioSelect"><strong>Seleziona Portafoglio:</strong></label>
         <select id="portfolioSelect" onchange="loadPortfolioData()">
@@ -85,6 +115,7 @@
         </div>
     </div>
 
+<!--
     <div class="card">
         <h2>Cache ETF Locale</h2>
         <button onclick="checkCacheStatus()" style="background: #6366f1; margin-bottom: 15px;">Verifica Cache</button>
@@ -92,6 +123,8 @@
             <p><em>Clicca su "Verifica Cache" per vedere gli ETF salvati localmente</em></p>
         </div>
     </div>
+-->
+
 
     <script>
         let myChart;
@@ -344,6 +377,120 @@
 
         fetchPortfoliosList();
         setInterval(fetchPortfoliosList, 10000);
+
+        // --- FUNZIONE PER SWITCHARE I TAB SUPERIORI ---
+        function switchPortfolioTab(tab) {
+            const tabCreate = document.getElementById('tabContentCreate');
+            const tabIO = document.getElementById('tabContentIO');
+            const btnCreate = document.getElementById('btnTabCreate');
+            const btnIO = document.getElementById('btnTabIO');
+
+            if (tab === 'create') {
+                // Mostra Creazione, Nascondi Import/Export
+                tabCreate.style.display = 'block';
+                tabIO.style.display = 'none';
+                
+                // Aggiorna gli stili dei pulsanti (Attivo / Inattivo)
+                btnCreate.style.background = '#2563eb';
+                btnCreate.style.color = 'white';
+                btnIO.style.background = '#f3f4f6';
+                btnIO.style.color = '#4b5563';
+            } else if (tab === 'io') {
+                // Mostra Import/Export, Nascondi Creazione
+                tabCreate.style.display = 'none';
+                tabIO.style.display = 'block';
+                
+                // Aggiorna gli stili dei pulsanti (Inattivo / Attivo)
+                btnCreate.style.background = '#f3f4f6';
+                btnCreate.style.color = '#4b5563';
+                btnIO.style.background = '#2563eb';
+                btnIO.style.color = 'white';
+            }
+        }
+
+        async function exportPortfolios() {
+            try {
+                const response = await fetch('/api/v1/portfolios/export', {
+                    headers: { 'X-Session-ID': sessionId }
+                });
+                
+                if (!response.ok) {
+                    const err = await response.json();
+                    throw new Error(err.detail || "Errore API");
+                }
+                
+                const data = await response.json();
+                if (Object.keys(data).length === 0) {
+                    alert("Nessun portafoglio da esportare nella sessione corrente.");
+                    return;
+                }
+                
+                // Creazione del file tramite Blob (molto più sicuro del Data URI)
+                const jsonString = JSON.stringify(data, null, 2);
+                const blob = new Blob([jsonString], { type: "application/json" });
+                const url = URL.createObjectURL(blob);
+                
+                const downloadAnchorNode = document.createElement('a');
+                downloadAnchorNode.href = url;
+                downloadAnchorNode.download = "miei_portafogli_etf.json";
+                
+                // Simula il click per avviare il download
+                document.body.appendChild(downloadAnchorNode); 
+                downloadAnchorNode.click();
+                
+                // Pulizia della memoria e rimozione del nodo
+                document.body.removeChild(downloadAnchorNode);
+                URL.revokeObjectURL(url);
+                
+            } catch (e) {
+                console.error("Dettagli errore export:", e);
+                alert("Errore durante l'esportazione. Controlla la console del browser per i dettagli.");
+            }
+        }
+
+        async function importPortfolios() {
+            const fileInput = document.getElementById('importFileInput');
+            if (!fileInput.files.length) {
+                alert("Seleziona un file JSON da importare.");
+                return;
+            }
+            
+            const file = fileInput.files[0];
+            const reader = new FileReader();
+            
+            // Quando il file è stato letto
+            reader.onload = async function(e) {
+                try {
+                    const importedData = JSON.parse(e.target.result);
+                    
+                    const response = await fetch('/api/v1/portfolios/import', {
+                        method: 'POST',
+                        headers: { 
+                            'Content-Type': 'application/json',
+                            'X-Session-ID': sessionId 
+                        },
+                        body: JSON.stringify(importedData)
+                    });
+                    
+                    if (response.ok) {
+                        const result = await response.json();
+                        alert(result.message);
+                        fetchPortfoliosList(); // Aggiorna il menu a tendina
+                        fileInput.value = ""; // Resetta l'input file
+                    } else {
+                        const err = await response.json();
+                        alert("Errore importazione: Formato non valido (" + err.detail + ")");
+                    }
+                } catch (err) {
+                    console.error(err);
+                    alert("Errore: Il file selezionato non è un JSON valido.");
+                }
+            };
+            
+            // Legge il file come testo
+            reader.readAsText(file);
+        }
+        
     </script>
 </body>
 </html>

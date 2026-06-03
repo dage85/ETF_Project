@@ -10,6 +10,7 @@ import os
 import json
 import pandas as pd
 from pathlib import Path
+from typing import List, Dict
 
 # Cartelle separate per dati globali e dati di sessione
 SESSION_DIR = "portfolios_sessions"
@@ -211,6 +212,44 @@ def get_portfolio_history(name: str, x_session_id: str = Header(None)):
             
     result = [{"Date": date, "Value": round(val, 2)} for date, val in portfolio_series.items()]
     return {"portfolio": name, "data": result}
+
+@app.get("/api/v1/portfolios/export")
+def export_portfolios(x_session_id: str = Header(None)):
+    """Esporta tutti i portafogli della sessione corrente in formato JSON"""
+    if not x_session_id:
+        raise HTTPException(status_code=400, detail="Identificativo sessione mancante")
+        
+    session_portfolios = load_session_portfolios(x_session_id)
+    return session_portfolios
+
+@app.post("/api/v1/portfolios/import")
+def import_portfolios(imported_data: Dict[str, Portfolio], x_session_id: str = Header(None)):
+    """Importa portafogli da un dizionario JSON"""
+    if not x_session_id:
+        raise HTTPException(status_code=400, detail="Identificativo sessione mancante")
+        
+    session_portfolios = load_session_portfolios(x_session_id)
+    new_tickers = set()
+    existing_tickers = set(market_data.keys())
+    
+    # Scorre i portafogli importati e li aggiunge alla sessione
+    for name, portfolio in imported_data.items():
+        # Forza uppercase per sicurezza
+        for a in portfolio.assets:
+            a.ticker = a.ticker.upper()
+            if a.ticker not in existing_tickers:
+                new_tickers.add(a.ticker)
+        
+        # Aggiunge o sovrascrive il portafoglio
+        session_portfolios[name] = portfolio
+        
+    save_session_portfolios(x_session_id, session_portfolios)
+    
+    # Se ci sono nuovi ticker importati, scaricali e mettili in cache
+    if new_tickers:
+        download_and_save_data(new_tickers)
+        
+    return {"message": f"{len(imported_data)} portafogli importati con successo!"}
 
 @app.get("/api/v1/etf-cache/status")
 def get_etf_cache_status():
