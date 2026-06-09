@@ -128,7 +128,7 @@
             </div>
         </div>
         
-        <h3 style="margin-top: 30px;">Andamento Portafoglio</h3>
+        <h3 style="margin-top: 50px;">Andamento Portafoglio</h3>
         <div class="chart-container">
             <canvas id="etfChart"></canvas>
         </div>
@@ -445,13 +445,31 @@
                 if (!response.ok) throw new Error((await response.json()).detail);
                 const data = await response.json();
                 
-                // [...] QUI INSERISCI IL CODICE ESISTENTE CHE POPOLA LA TABELLA KPI [...]
+                // 1. Imposta i nomi degli header della tabella
                 document.getElementById('benchName1').textContent = data.p1_name;
-                // [...] (Mantenere la logica della tabella inalterata)
+                document.getElementById('benchName2').textContent = data.p2_name;
                 
+                // 2. Popola la tabella KPI svuotando prima i risultati precedenti
+                const tbody = document.getElementById('benchTableBody');
+                tbody.innerHTML = ''; 
+                
+                data.metrics.forEach(metric => {
+                    const val1 = data.p1_results[metric];
+                    const val2 = data.p2_results[metric];
+                    
+                    const tr = document.createElement('tr');
+                    tr.innerHTML = `
+                        <td style="padding: 12px; border-bottom: 1px solid #e5e7eb;"><strong>${metric}</strong></td>
+                        <td class="bench-td" style="padding: 12px; border-bottom: 1px solid #e5e7eb;">${val1 !== undefined ? val1 : '-'}</td>
+                        <td class="bench-td" style="padding: 12px; border-bottom: 1px solid #e5e7eb;">${val2 !== undefined ? val2 : '-'}</td>
+                    `;
+                    tbody.appendChild(tr);
+                });
+                
+                // 3. Mostra la sezione dei risultati testuali
                 document.getElementById('benchmarkResults').style.display = 'block';
                 
-                // Nuovo: Renderizza i grafici avanzati
+                // 4. Renderizza i grafici avanzati
                 renderBenchmarkCharts(data);
                 document.getElementById('benchmarkCharts').style.display = 'block';
 
@@ -485,13 +503,7 @@
                     responsive: true, maintainAspectRatio: false, interaction: { mode: 'index', intersect: false },
                     plugins: {
                         tooltip: { callbacks: { label: (ctx) => `${ctx.dataset.label}: ${ctx.parsed.y.toFixed(2)}%` } },
-                        zoom: { zoom: { wheel: { enabled: true }, mode: 'x' }, pan: { enabled: true, mode: 'x' } },
-                        annotation: {
-                            annotations: {
-                                covid: { type: 'line', scaleID: 'x', value: '2020-03-01', borderColor: 'rgba(239, 68, 68, 0.4)', borderWidth: 2, label: { content: 'Covid-19', display: true, position: 'start', backgroundColor: 'rgba(239, 68, 68, 0.7)' } },
-                                ukraine: { type: 'line', scaleID: 'x', value: '2022-02-24', borderColor: 'rgba(245, 158, 11, 0.4)', borderWidth: 2, label: { content: 'Guerra Ucraina', display: true, position: 'start', backgroundColor: 'rgba(245, 158, 11, 0.7)' } }
-                            }
-                        }
+                        zoom: { zoom: { wheel: { enabled: true }, mode: 'x' }, pan: { enabled: true, mode: 'x' } }
                     },
                     scales: { y: { title: { display: true, text: 'Rendimento Rolling (%)' } } }
                 }

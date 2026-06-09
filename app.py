@@ -303,15 +303,22 @@ def run_benchmark(p1: str, p2: str, rolling_years: int = 5, x_session_id: str = 
     roll1 = compute_rolling_data(series1)
     roll2 = compute_rolling_data(series2)
 
-    def compute_metrics(series):
-        returns = series.pct_change().dropna()
+    def compute_metrics(series, years):
+        # Isola solo gli ultimi 'years' anni (circa 252 giorni lavorativi all'anno)
+        trading_days = years * 252
+        if len(series) > trading_days:
+            series_sliced = series.iloc[-trading_days:]
+        else:
+            series_sliced = series
+
+        returns = series_sliced.pct_change().dropna()
         if returns.empty: return {}
 
-        total_return = (series.iloc[-1] / series.iloc[0]) - 1
-        days = len(series)
-        years = days / 252
+        total_return = (series_sliced.iloc[-1] / series_sliced.iloc[0]) - 1
+        days = len(series_sliced)
+        actual_years = days / 252
         
-        cagr = ((1 + total_return) ** (1 / years) - 1) if years > 0 and (1 + total_return) > 0 else 0
+        cagr = ((1 + total_return) ** (1 / actual_years) - 1) if actual_years > 0 and (1 + total_return) > 0 else 0
         volatility = returns.std() * np.sqrt(252)
         sharpe = cagr / volatility if volatility > 0 else 0
         
@@ -319,8 +326,8 @@ def run_benchmark(p1: str, p2: str, rolling_years: int = 5, x_session_id: str = 
         downside_std = downside_returns.std() * np.sqrt(252) if len(downside_returns) > 0 else 0
         sortino = cagr / downside_std if downside_std > 0 else 0
         
-        running_max = series.cummax()
-        drawdown = (series - running_max) / running_max
+        running_max = series_sliced.cummax()
+        drawdown = (series_sliced - running_max) / running_max
         max_dd = drawdown.min()
         
         calmar = cagr / abs(max_dd) if max_dd < 0 else 0
@@ -330,7 +337,7 @@ def run_benchmark(p1: str, p2: str, rolling_years: int = 5, x_session_id: str = 
         
         pos_days = (returns > 0).mean()
         
-        rolling_1y = series.pct_change(periods=min(252, len(series)-1)).dropna()
+        rolling_1y = series_sliced.pct_change(periods=min(252, len(series_sliced)-1)).dropna()
         pos_roll = (rolling_1y > 0).mean() if not rolling_1y.empty else 0
         
         return {
@@ -347,9 +354,25 @@ def run_benchmark(p1: str, p2: str, rolling_years: int = 5, x_session_id: str = 
             "% Rolling Positivi": f"{pos_roll*100:.2f}%"
         }
 
-    res1 = compute_metrics(series1)
-    res2 = compute_metrics(series2)
+    # Passa il parametro rolling_years alla funzione
+    res1 = compute_metrics(series1, rolling_years)
+    res2 = compute_metrics(series2, rolling_years)
     
+    # Convertiamo gli anni in giorni di borsa (circa 252 all'anno)
+    display_days = rolling_years * 252
+    
+    # Estraiamo tutte le date storiche
+    chart_dates = series1.index.tolist()
+
+    if len(chart_dates) > display_days:
+        chart_dates = chart_dates[-display_days:]
+        
+        def slice_rolling_dict(roll_data):
+            return {k: v[-display_days:] for k, v in roll_data.items()}
+        
+        roll1 = slice_rolling_dict(roll1)
+        roll2 = slice_rolling_dict(roll2)
+
     return {
         "metrics": list(res1.keys()),
         "p1_name": p1,
@@ -357,7 +380,7 @@ def run_benchmark(p1: str, p2: str, rolling_years: int = 5, x_session_id: str = 
         "p1_results": res1,
         "p2_results": res2,
         "charts": {
-            "dates": series1.index.tolist(),
+            "dates": chart_dates,
             "p1": roll1,
             "p2": roll2
         }
