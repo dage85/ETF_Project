@@ -3,19 +3,16 @@ from fastapi import FastAPI, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
-from typing import List
-from contextlib import asynccontextmanager
 import uvicorn
 import os
 import json
 import pandas as pd
-import numpy as np # <--- NUOVO: Aggiunto per le formule statistiche
+import numpy as np
 from pathlib import Path
 from typing import List, Dict
 
-# Cartelle separate per dati globali e dati di sessione
+# Cartelle per dati globali e dati di sessione
 SESSION_DIR = "portfolios_sessions"
-DATA_FILE = "market_data.json"
 ETF_CACHE_DIR = "etf_data"
 
 # Assicura che le cartelle esistano
@@ -31,8 +28,6 @@ class Portfolio(BaseModel):
     name: str
     assets: List[Asset]
 
-# --- Stato Globale (solo per la cache di mercato) ---
-market_data = {}
 
 # --- Funzioni Helper per la Sessione ---
 def get_session_file(session_id: str) -> str:
@@ -44,7 +39,20 @@ def load_session_portfolios(session_id: str) -> dict:
     if os.path.exists(file_path):
         with open(file_path, "r") as f:
             data = json.load(f)
-            return {k: Portfolio(**v) for k, v in data.items()}
+            portfolios = {k: Portfolio(**v) for k, v in data.items()}
+            
+            missing_tickers = set()
+            for p in portfolios.values():
+                for asset in p.assets:
+                    ticker_upper = asset.ticker.upper()
+                    if not etf_exists_locally(ticker_upper):
+                        missing_tickers.add(ticker_upper)
+            
+            if missing_tickers:
+                print(f"🔍 Rilevati ticker salvati ma assenti in cache: {missing_tickers}. Avvio recupero dati...")
+                download_and_save_data(missing_tickers)
+                
+            return portfolios
     return {}
 
 def save_session_portfolios(session_id: str, portfolios: dict):
@@ -52,19 +60,20 @@ def save_session_portfolios(session_id: str, portfolios: dict):
     with open(file_path, "w") as f:
         json.dump({k: v.dict() for k, v in portfolios.items()}, f)
 
-# --- Funzioni di Cache ETF (Invariate e Globali) ---
+
+# --- Funzioni di Cache ETF ---
 def get_etf_cache_path(ticker: str) -> str:
     return os.path.join(ETF_CACHE_DIR, f"{ticker.upper()}.json")
 
 def etf_exists_locally(ticker: str) -> bool:
     return os.path.exists(get_etf_cache_path(ticker))
 
-def load_etf_from_cache(ticker: str) -> dict:
+def load_etf_from_cache(ticker: str) -> list:
     try:
         with open(get_etf_cache_path(ticker), "r") as f:
             return json.load(f)
     except Exception as e:
-        print(f"Errore cache: {e}")
+        print(f"Errore cache per {ticker}: {e}")
         return []
 
 def save_etf_to_cache(ticker: str, data: list):
@@ -72,43 +81,67 @@ def save_etf_to_cache(ticker: str, data: list):
         with open(get_etf_cache_path(ticker), "w") as f:
             json.dump(data, f)
     except Exception as e:
-        print(f"Errore salvataggio cache: {e}")
+        print(f"Errore salvataggio cache per {ticker}: {e}")
 
 def download_and_save_data(tickers: set):
-    global market_data
-    if os.path.exists(DATA_FILE):
-        with open(DATA_FILE, "r") as f:
-            market_data = json.load(f)
-            
     for ticker in tickers:
         ticker_upper = ticker.upper()
         if etf_exists_locally(ticker_upper):
-            market_data[ticker_upper] = load_etf_from_cache(ticker_upper)
-        else:
-            try:
-                asset = yf.Ticker(ticker_upper)
-                hist = asset.history(period="5y") 
-                if not hist.empty:
-                    hist.reset_index(inplace=True)
-                    hist['Date'] = hist['Date'].dt.strftime('%Y-%m-%d')
-                    etf_data = hist[['Date', 'Close']].to_dict(orient="records")
-                    market_data[ticker_upper] = etf_data
-                    save_etf_to_cache(ticker_upper, etf_data)
-            except Exception as e:
-                print(f"Errore download {ticker_upper}: {e}")
+            continue
             
-    with open(DATA_FILE, "w") as f:
-        json.dump(market_data, f)
+        try:
+            asset = yf.Ticker(ticker_upper)
+            hist = asset.history(period="10y")
+            if not hist.empty:
+                hist.reset_index(inplace=True)
+                
+                # Risoluzione anomalie indici di YFinance
+                if 'Date' not in hist.columns:
+                    if 'Datetime' in hist.columns:
+                        hist.rename(columns={'Datetime': 'Date'}, inplace=True)
+                    elif 'index' in hist.columns:
+                        hist.rename(columns={'index': 'Date'}, inplace=True)
+                
+                # Conversione data in formato pulito ignorando problematiche di TimeZone
+                hist['Date'] = pd.to_datetime(hist['Date'], utc=True).dt.strftime('%Y-%m-%d')
+                
+                etf_data = hist[['Date', 'Close']].to_dict(orient="records")
+                save_etf_to_cache(ticker_upper, etf_data)
+                print(f"✅ Dati scaricati e salvati in cache per: {ticker_upper}")
+        except Exception as e:
+            print(f"❌ Errore download {ticker_upper}: {e}")
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    if os.path.exists(DATA_FILE):
-        with open(DATA_FILE, "r") as f:
-            global market_data
-            market_data = json.load(f)
-    yield
 
-app = FastAPI(title="Portfolio ETF API Isolated", lifespan=lifespan)
+# --- FUNZIONE HELPER ROBUSTA PER UNIRE I DATI DEL PORTAFOGLIO ---
+def get_portfolio_df(portfolio: Portfolio) -> pd.DataFrame:
+    dfs = []
+    for asset in portfolio.assets:
+        ticker = asset.ticker.upper()
+        if etf_exists_locally(ticker):
+            etf_data = load_etf_from_cache(ticker)
+            if etf_data:
+                df = pd.DataFrame(etf_data)
+                if 'Date' in df.columns and 'Close' in df.columns:
+                    df.set_index('Date', inplace=True)
+                    df.rename(columns={'Close': ticker}, inplace=True)
+                    df = df[~df.index.duplicated(keep='last')]
+                    dfs.append(df)
+    
+    if not dfs:
+        return pd.DataFrame()
+        
+    merged = pd.concat(dfs, axis=1)
+    
+    # FONDAMENTALE: Ordina l'indice cronologicamente PRIMA di applicare le logiche di filling
+    merged.sort_index(inplace=True) 
+    
+    merged.ffill(inplace=True)
+    merged.dropna(inplace=True)
+    return merged
+
+
+# --- Inizializzazione FastAPI ---
+app = FastAPI(title="Portfolio ETF API Isolated")
 
 app.add_middleware(
     CORSMiddleware,
@@ -125,7 +158,7 @@ def serve_frontend():
     return {"error": "File index.html non trovato."}
 
 
-# --- API Gestione Portafogli Isolate per Sessione ---
+# --- API Gestione Portafogli ---
 
 @app.post("/api/v1/portfolios")
 def create_portfolio(portfolio: Portfolio, x_session_id: str = Header(None)):
@@ -141,13 +174,12 @@ def create_portfolio(portfolio: Portfolio, x_session_id: str = Header(None)):
 
     session_portfolios = load_session_portfolios(x_session_id)
     session_portfolios[portfolio.name] = portfolio
-    save_session_portfolios(x_session_id, session_portfolios)
     
-    existing_tickers = set(market_data.keys())
-    new_tickers = set(a.ticker for a in portfolio.assets) - existing_tickers
+    new_tickers = set(a.ticker for a in portfolio.assets if not etf_exists_locally(a.ticker))
     if new_tickers:
         download_and_save_data(new_tickers)
         
+    save_session_portfolios(x_session_id, session_portfolios)
     return {"message": "Portafoglio creato con successo"}
 
 @app.get("/api/v1/portfolios")
@@ -164,7 +196,7 @@ def get_portfolio_composition(name: str, x_session_id: str = Header(None)):
         
     session_portfolios = load_session_portfolios(x_session_id)
     if name not in session_portfolios:
-        raise HTTPException(status_code=404, detail="Portafoglio non trovato in questa sessione")
+        raise HTTPException(status_code=404, detail="Portafoglio non trovato")
     
     p = session_portfolios[name]
     assets_detail = [{"ticker": asset.ticker, "weight": asset.weight} for asset in p.assets]
@@ -184,36 +216,31 @@ def get_portfolio_history(name: str, x_session_id: str = Header(None)):
         raise HTTPException(status_code=404, detail="Portafoglio non trovato")
     
     p = session_portfolios[name]
-    dfs = []
+    merged = get_portfolio_df(p)
     
-    for asset in p.assets:
-        if asset.ticker not in market_data:
-            continue
-        df = pd.DataFrame(market_data[asset.ticker])
-        df.set_index('Date', inplace=True)
-        df.rename(columns={'Close': asset.ticker}, inplace=True)
-        dfs.append(df)
+    if merged.empty:
+        raise HTTPException(status_code=404, detail="Dati insufficienti o date non allineate (verifica lo storico degli ETF).")
         
-    if not dfs:
-        raise HTTPException(status_code=404, detail="Dati non disponibili")
-        
-    merged = pd.concat(dfs, axis=1)
-    merged.ffill(inplace=True)
-    merged.dropna(inplace=True)
-    
     portfolio_series = pd.Series(0.0, index=merged.index)
     for asset in p.assets:
-        if asset.ticker in merged.columns:
-            normalized_price = (merged[asset.ticker] / merged[asset.ticker].iloc[0]) * 100
+        ticker = asset.ticker.upper()
+        if ticker in merged.columns:
+            first_val = merged[ticker].iloc[0]
+            if first_val == 0: first_val = 1e-9 # Previene divisione per zero
+            normalized_price = (merged[ticker] / first_val) * 100
             portfolio_series += normalized_price * (asset.weight / 100.0)
             
-    result = [{"Date": date, "Value": round(val, 2)} for date, val in portfolio_series.items()]
+    portfolio_series.fillna(0, inplace=True)
+    
+    # Assicura serializzazione sicura: converte sempre la data a stringa pura e il valore a float pulito
+    result = [{"Date": str(date)[:10], "Value": round(float(val), 2)} for date, val in portfolio_series.items()]
+    
     return {"portfolio": name, "data": result}
 
 
-# --- NUOVO: Endpoint di Benchmark ---
+# --- Endpoint di Benchmark ---
 @app.get("/api/v1/benchmark")
-def run_benchmark(p1: str, p2: str, x_session_id: str = Header(None)):
+def run_benchmark(p1: str, p2: str, rolling_years: int = 5, x_session_id: str = Header(None)):
     if not x_session_id:
         raise HTTPException(status_code=400, detail="Identificativo sessione mancante")
         
@@ -224,48 +251,58 @@ def run_benchmark(p1: str, p2: str, x_session_id: str = Header(None)):
     port1 = session_portfolios[p1]
     port2 = session_portfolios[p2]
 
-    # Helper per estrarre la tabella combinata degli ETF di un portafoglio
-    def get_assets_df(portfolio):
-        dfs = []
-        for asset in portfolio.assets:
-            if asset.ticker in market_data:
-                df = pd.DataFrame(market_data[asset.ticker])
-                df.set_index('Date', inplace=True)
-                df.rename(columns={'Close': asset.ticker}, inplace=True)
-                dfs.append(df)
-        if not dfs: return pd.DataFrame()
-        merged = pd.concat(dfs, axis=1)
-        merged.ffill(inplace=True)
-        merged.dropna(inplace=True)
-        return merged
-
-    df1 = get_assets_df(port1)
-    df2 = get_assets_df(port2)
+    df1 = get_portfolio_df(port1)
+    df2 = get_portfolio_df(port2)
 
     if df1.empty or df2.empty:
-        raise HTTPException(status_code=400, detail="Dati non sufficienti per il benchmark")
+        raise HTTPException(status_code=400, detail="Dati non sufficienti per eseguire il benchmark.")
 
-    # Identifica le date in comune in modo da avere un confronto leale (Fair Comparison)
     common_dates = df1.index.intersection(df2.index)
     if len(common_dates) < 2:
-        raise HTTPException(status_code=400, detail="Periodo storico in comune troppo breve")
+        raise HTTPException(status_code=400, detail="Periodo storico in comune troppo breve (meno di 2 giorni).")
 
     df1 = df1.loc[common_dates]
     df2 = df2.loc[common_dates]
 
-    # Ricrea la linea base su 100 focalizzata sul periodo comune
     def calc_portfolio_series(df, portfolio):
         series = pd.Series(0.0, index=df.index)
         for asset in portfolio.assets:
-            if asset.ticker in df.columns:
-                norm = df[asset.ticker] / df[asset.ticker].iloc[0]
+            ticker = asset.ticker.upper()
+            if ticker in df.columns:
+                first_val = df[ticker].iloc[0]
+                if first_val == 0: first_val = 1e-9
+                norm = df[ticker] / first_val
                 series += norm * (asset.weight / 100.0)
         return series
 
     series1 = calc_portfolio_series(df1, port1)
     series2 = calc_portfolio_series(df2, port2)
 
-    # Motore di calcolo degli Indicatori
+    window = rolling_years * 252
+
+    def compute_rolling_data(series):
+        ret = series.pct_change(periods=window)
+        
+        daily_returns = series.pct_change()
+        vol = daily_returns.rolling(window=window).std() * np.sqrt(252)
+        sharpe = ret / vol
+        
+        def mdd(x):
+            peaks = np.maximum.accumulate(x)
+            drawdowns = (x - peaks) / peaks
+            return np.min(drawdowns) if len(drawdowns) > 0 else 0
+            
+        mdd_series = series.rolling(window=window).apply(mdd, raw=True)
+        
+        return {
+            "rolling_return": [x if pd.notna(x) and not np.isinf(x) else None for x in ret],
+            "rolling_sharpe": [x if pd.notna(x) and not np.isinf(x) else None for x in sharpe],
+            "rolling_mdd": [x if pd.notna(x) and not np.isinf(x) else None for x in mdd_series]
+        }
+
+    roll1 = compute_rolling_data(series1)
+    roll2 = compute_rolling_data(series2)
+
     def compute_metrics(series):
         returns = series.pct_change().dropna()
         if returns.empty: return {}
@@ -279,7 +316,7 @@ def run_benchmark(p1: str, p2: str, x_session_id: str = Header(None)):
         sharpe = cagr / volatility if volatility > 0 else 0
         
         downside_returns = returns[returns < 0]
-        downside_std = downside_returns.std() * np.sqrt(252)
+        downside_std = downside_returns.std() * np.sqrt(252) if len(downside_returns) > 0 else 0
         sortino = cagr / downside_std if downside_std > 0 else 0
         
         running_max = series.cummax()
@@ -318,16 +355,19 @@ def run_benchmark(p1: str, p2: str, x_session_id: str = Header(None)):
         "p1_name": p1,
         "p2_name": p2,
         "p1_results": res1,
-        "p2_results": res2
+        "p2_results": res2,
+        "charts": {
+            "dates": series1.index.tolist(),
+            "p1": roll1,
+            "p2": roll2
+        }
     }
-
 
 @app.get("/api/v1/portfolios/export")
 def export_portfolios(x_session_id: str = Header(None)):
     if not x_session_id:
         raise HTTPException(status_code=400, detail="Identificativo sessione mancante")
-    session_portfolios = load_session_portfolios(x_session_id)
-    return session_portfolios
+    return load_session_portfolios(x_session_id)
 
 @app.post("/api/v1/portfolios/import")
 def import_portfolios(imported_data: Dict[str, Portfolio], x_session_id: str = Header(None)):
@@ -335,20 +375,19 @@ def import_portfolios(imported_data: Dict[str, Portfolio], x_session_id: str = H
         raise HTTPException(status_code=400, detail="Identificativo sessione mancante")
         
     session_portfolios = load_session_portfolios(x_session_id)
-    new_tickers = set()
-    existing_tickers = set(market_data.keys())
+    missing_tickers = set()
     
     for name, portfolio in imported_data.items():
         for a in portfolio.assets:
             a.ticker = a.ticker.upper()
-            if a.ticker not in existing_tickers:
-                new_tickers.add(a.ticker)
+            if not etf_exists_locally(a.ticker):
+                missing_tickers.add(a.ticker)
         session_portfolios[name] = portfolio
         
     save_session_portfolios(x_session_id, session_portfolios)
     
-    if new_tickers:
-        download_and_save_data(new_tickers)
+    if missing_tickers:
+        download_and_save_data(missing_tickers)
         
     return {"message": f"{len(imported_data)} portafogli importati con successo!"}
 
@@ -362,6 +401,15 @@ def get_etf_cache_status():
                 file_size = os.path.getsize(os.path.join(ETF_CACHE_DIR, file))
                 cached_etfs.append({"ticker": ticker, "cached": True, "file_size_bytes": file_size})
     return {"cached_etfs": cached_etfs, "total_cached": len(cached_etfs)}
+
+@app.post("/api/v1/etf-cache/clear/{ticker}")
+def clear_etf_cache(ticker: str):
+    ticker = ticker.upper()
+    cache_path = get_etf_cache_path(ticker)
+    if os.path.exists(cache_path):
+        os.remove(cache_path)
+        return {"message": f"Cache per {ticker} eliminata"}
+    raise HTTPException(status_code=404, detail=f"ETF {ticker} non trovato in cache")
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)

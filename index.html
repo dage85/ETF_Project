@@ -4,6 +4,9 @@
     <meta charset="UTF-8">
     <title>Gestione Portafogli ETF</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation"></script>
+    <script src="https://unpkg.com/@sgratzl/chartjs-chart-boxplot@4.3.0/build/index.umd.min.js"></script>
     <style>
         body { font-family: sans-serif; max-width: 900px; margin: 40px auto; padding: 0 20px; }
         h1, h2 { text-align: center; }
@@ -26,6 +29,15 @@
         .bench-td { text-align: right; font-weight: 500; font-family: monospace; font-size: 14px; }
         .bench-better { color: #10b981; font-weight: bold; } /* Verde scuro */
         .bench-worse { color: #ef4444; } /* Rosso scuro */
+
+        .benchmark-chart-box {
+            background: white; 
+            border: 1px solid #e5e7eb; 
+            border-radius: 8px; 
+            padding: 15px; 
+            margin-bottom: 30px;
+        }
+        .benchmark-chart-box h3 { text-align: left; margin-top: 0; color: #374151; font-size: 16px; }
     </style>
 </head>
 <body>
@@ -129,15 +141,19 @@
         <div style="display: flex; gap: 20px; justify-content: center; align-items: center; margin-bottom: 20px; flex-wrap: wrap;">
             <div>
                 <label for="benchSelect1"><strong>Portafoglio 1:</strong></label><br>
-                <select id="benchSelect1" style="min-width: 150px; margin-top: 5px;">
-                    <option value="">-- Seleziona --</option>
-                </select>
+                <select id="benchSelect1" style="min-width: 150px; margin-top: 5px;"></select>
             </div>
             <div style="font-size: 24px; font-weight: bold; color: #9ca3af; margin-top: 15px;">VS</div>
             <div>
                 <label for="benchSelect2"><strong>Portafoglio 2:</strong></label><br>
-                <select id="benchSelect2" style="min-width: 150px; margin-top: 5px;">
-                    <option value="">-- Seleziona --</option>
+                <select id="benchSelect2" style="min-width: 150px; margin-top: 5px;"></select>
+            </div>
+            <div style="margin-top: 15px; border-left: 2px solid #e5e7eb; padding-left: 20px;">
+                <label for="benchRolling"><strong>Finestra Rolling:</strong></label><br>
+                <select id="benchRolling" style="min-width: 100px; margin-top: 5px;">
+                    <option value="1">1 Anno</option>
+                    <option value="3">3 Anni</option>
+                    <option value="5" selected>5 Anni</option>
                 </select>
             </div>
         </div>
@@ -154,13 +170,41 @@
                     </tr>
                 </thead>
                 <tbody id="benchTableBody">
-                    </tbody>
+                </tbody>
             </table>
+        </div>
+        
+
+        <div id="benchmarkCharts" style="display: none; margin-top: 50px;">
+            <hr style="border: 0; border-top: 1px solid #e5e7eb; margin-bottom: 30px;">
+            <h2>Grafici Portafogli</h2>
+            <p style="color: #6b7280; font-size: 14px; margin-bottom: 30px;">Interpretazione del comportamento storico, lettura del rischio e distribuzione dei risultati.</p>
+            
+            <div class="benchmark-chart-box">
+                <h3>1. Rolling Return</h3>
+                <div class="chart-container"><canvas id="rollingReturnChart"></canvas></div>
+            </div>
+
+            <div class="benchmark-chart-box">
+                <h3>2. Rolling Sharpe</h3>
+                <div class="chart-container" style="height: 350px;"><canvas id="rollingSharpeChart"></canvas></div>
+            </div>
+
+            <div class="benchmark-chart-box">
+                <h3>3. Rolling Maximum Drawdown</h3>
+                <div class="chart-container" style="height: 350px;"><canvas id="rollingMddChart"></canvas></div>
+            </div>
+
+            <div class="benchmark-chart-box">
+                <h3>4. Boxplot Rolling Return</h3>
+                <div class="chart-container" style="height: 400px;"><canvas id="boxplotChart"></canvas></div>
+            </div>
         </div>
     </div>
     <script>
         let myChart;
         let compositionChart;
+        let rrChart, rsChart, rmddChart, boxChart;
 
         if (!sessionStorage.getItem('etf_session_id')) {
             const array = new Uint32Array(4);
@@ -299,7 +343,10 @@
                 const response = await fetch(`/api/v1/portfolios/${name}/composition`, {
                     headers: { 'X-Session-ID': sessionId }
                 });
-                if (!response.ok) throw new Error("Errore nel fetch composizione");
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.detail || "Errore nel fetch dati");
+                }
                 
                 const result = await response.json();
                 renderComposition(result.assets);
@@ -320,7 +367,12 @@
                 const response = await fetch(`/api/v1/portfolios/${name}/history`, {
                     headers: { 'X-Session-ID': sessionId }
                 });
-                if (!response.ok) throw new Error("Errore nel fetch dati");
+                
+                // Migliorata la cattura dell'errore per leggere i dettagli dal server
+                if (!response.ok) {
+                    const err = await response.json();
+                    throw new Error(err.detail || "Errore sconosciuto dal server");
+                }
                 
                 const result = await response.json();
                 const labels = result.data.map(item => item.Date);
@@ -328,88 +380,9 @@
                 renderChart(labels, values, name);
             } catch (error) {
                 console.error(error);
-                alert("Impossibile caricare i dati del portafoglio.");
+                alert("Errore grafico andamento: " + error.message);
             }
         }
-
-        // --- NUOVO: Logica Benchmark Frontend ---
-        async function runBenchmark() {
-            const p1 = document.getElementById('benchSelect1').value;
-            const p2 = document.getElementById('benchSelect2').value;
-
-            if (!p1 || !p2) {
-                alert("Per favore, seleziona due portafogli da confrontare.");
-                return;
-            }
-            if (p1 === p2) {
-                alert("Seleziona due portafogli diversi per eseguire il benchmark.");
-                return;
-            }
-
-            try {
-                const response = await fetch(`/api/v1/benchmark?p1=${encodeURIComponent(p1)}&p2=${encodeURIComponent(p2)}`, {
-                    headers: { 'X-Session-ID': sessionId }
-                });
-                
-                if (!response.ok) {
-                    const err = await response.json();
-                    throw new Error(err.detail || "Errore durante l'esecuzione del benchmark.");
-                }
-
-                const data = await response.json();
-                document.getElementById('benchName1').textContent = data.p1_name;
-                document.getElementById('benchName2').textContent = data.p2_name;
-
-                const tbody = document.getElementById('benchTableBody');
-                tbody.innerHTML = '';
-
-                data.metrics.forEach(metric => {
-                    const tr = document.createElement('tr');
-                    
-                    const tdMetric = document.createElement('td');
-                    tdMetric.innerHTML = `<strong>${metric}</strong>`;
-                    tdMetric.style.padding = "10px";
-                    
-                    const td1 = document.createElement('td');
-                    td1.textContent = data.p1_results[metric] || "N/A";
-                    td1.className = "bench-td";
-                    
-                    const td2 = document.createElement('td');
-                    td2.textContent = data.p2_results[metric] || "N/A";
-                    td2.className = "bench-td";
-
-                    // Highlight Colori Intelligente (Verde=Migliore, Rosso=Peggiore)
-                    const val1 = parseFloat(data.p1_results[metric]);
-                    const val2 = parseFloat(data.p2_results[metric]);
-
-                    // Per tutti gli indicatori un valore maggiore/meno negativo è migliore, TRANNE per la Volatilità
-                    const higherIsBetter = (metric !== 'Volatility'); 
-
-                    if (!isNaN(val1) && !isNaN(val2) && val1 !== val2) {
-                        const p1IsBetter = higherIsBetter ? (val1 > val2) : (val1 < val2);
-                        if (p1IsBetter) {
-                            td1.classList.add("bench-better");
-                            td2.classList.add("bench-worse");
-                        } else {
-                            td2.classList.add("bench-better");
-                            td1.classList.add("bench-worse");
-                        }
-                    }
-
-                    tr.appendChild(tdMetric);
-                    tr.appendChild(td1);
-                    tr.appendChild(td2);
-                    tbody.appendChild(tr);
-                });
-
-                document.getElementById('benchmarkResults').style.display = 'block';
-
-            } catch (e) {
-                console.error(e);
-                alert(e.message);
-            }
-        }
-        // ----------------------------------------
 
         function renderChart(labels, values, name) {
             const ctx = document.getElementById('etfChart').getContext('2d');
@@ -426,13 +399,162 @@
                         backgroundColor: 'rgba(16, 185, 129, 0.1)',
                         borderWidth: 2,
                         fill: true,
-                        pointRadius: 0
+                        pointRadius: 0,
+                        tension: 0.1 // Ammorbidisce leggermente la linea per renderla più fluida
                     }]
                 },
                 options: {
                     responsive: true,
                     maintainAspectRatio: false,
-                    scales: { x: { grid: { display: false } }, y: { beginAtZero: false } }
+                    interaction: {
+                        mode: 'index',
+                        intersect: false,
+                    },
+                    scales: { 
+                        x: { 
+                            grid: { display: false },
+                            ticks: { 
+                                // FIX: Previene l'ammasso di migliaia di date sull'asse X
+                                maxTicksLimit: 12, 
+                                maxRotation: 45,
+                                minRotation: 45
+                            }
+                        }, 
+                        y: { 
+                            beginAtZero: false 
+                        } 
+                    }
+                }
+            });
+        }
+
+        // --- NUOVO: Logica Benchmark Frontend ---
+        async function runBenchmark() {
+            const p1 = document.getElementById('benchSelect1').value;
+            const p2 = document.getElementById('benchSelect2').value;
+            const rollingYrs = document.getElementById('benchRolling').value;
+
+            if (!p1 || !p2) return alert("Seleziona due portafogli.");
+            if (p1 === p2) return alert("Seleziona due portafogli diversi.");
+
+            try {
+                const response = await fetch(`/api/v1/benchmark?p1=${encodeURIComponent(p1)}&p2=${encodeURIComponent(p2)}&rolling_years=${rollingYrs}`, {
+                    headers: { 'X-Session-ID': sessionId }
+                });
+                
+                if (!response.ok) throw new Error((await response.json()).detail);
+                const data = await response.json();
+                
+                // [...] QUI INSERISCI IL CODICE ESISTENTE CHE POPOLA LA TABELLA KPI [...]
+                document.getElementById('benchName1').textContent = data.p1_name;
+                // [...] (Mantenere la logica della tabella inalterata)
+                
+                document.getElementById('benchmarkResults').style.display = 'block';
+                
+                // Nuovo: Renderizza i grafici avanzati
+                renderBenchmarkCharts(data);
+                document.getElementById('benchmarkCharts').style.display = 'block';
+
+            } catch (e) {
+                console.error(e);
+                alert(e.message);
+            }
+        }
+        // ----------------------------------------
+
+        function renderBenchmarkCharts(data) {
+            const dates = data.charts.dates;
+            const p1 = data.p1_name;
+            const p2 = data.p2_name;
+            
+            const p1Color = '#3b82f6';
+            const p2Color = '#10b981';
+
+            // 1. Rolling Return
+            if(rrChart) rrChart.destroy();
+            rrChart = new Chart(document.getElementById('rollingReturnChart'), {
+                type: 'line',
+                data: {
+                    labels: dates,
+                    datasets: [
+                        { label: p1, data: data.charts.p1.rolling_return.map(v => v !== null ? v*100 : null), borderColor: p1Color, borderWidth: 2, pointRadius: 0, tension: 0.1 },
+                        { label: p2, data: data.charts.p2.rolling_return.map(v => v !== null ? v*100 : null), borderColor: p2Color, borderWidth: 2, pointRadius: 0, tension: 0.1 }
+                    ]
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false, interaction: { mode: 'index', intersect: false },
+                    plugins: {
+                        tooltip: { callbacks: { label: (ctx) => `${ctx.dataset.label}: ${ctx.parsed.y.toFixed(2)}%` } },
+                        zoom: { zoom: { wheel: { enabled: true }, mode: 'x' }, pan: { enabled: true, mode: 'x' } },
+                        annotation: {
+                            annotations: {
+                                covid: { type: 'line', scaleID: 'x', value: '2020-03-01', borderColor: 'rgba(239, 68, 68, 0.4)', borderWidth: 2, label: { content: 'Covid-19', display: true, position: 'start', backgroundColor: 'rgba(239, 68, 68, 0.7)' } },
+                                ukraine: { type: 'line', scaleID: 'x', value: '2022-02-24', borderColor: 'rgba(245, 158, 11, 0.4)', borderWidth: 2, label: { content: 'Guerra Ucraina', display: true, position: 'start', backgroundColor: 'rgba(245, 158, 11, 0.7)' } }
+                            }
+                        }
+                    },
+                    scales: { y: { title: { display: true, text: 'Rendimento Rolling (%)' } } }
+                }
+            });
+
+            // 2. Rolling Sharpe
+            if(rsChart) rsChart.destroy();
+            rsChart = new Chart(document.getElementById('rollingSharpeChart'), {
+                type: 'line',
+                data: {
+                    labels: dates,
+                    datasets: [
+                        { label: p1, data: data.charts.p1.rolling_sharpe, borderColor: p1Color, borderWidth: 2, pointRadius: 0 },
+                        { label: p2, data: data.charts.p2.rolling_sharpe, borderColor: p2Color, borderWidth: 2, pointRadius: 0 }
+                    ]
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false, interaction: { mode: 'index', intersect: false },
+                    plugins: { zoom: { zoom: { wheel: { enabled: true }, mode: 'x' }, pan: { enabled: true, mode: 'x' } } },
+                    scales: { y: { title: { display: true, text: 'Indice di Sharpe' } } }
+                }
+            });
+
+            // 3. Rolling Max Drawdown
+            if(rmddChart) rmddChart.destroy();
+            rmddChart = new Chart(document.getElementById('rollingMddChart'), {
+                type: 'line',
+                data: {
+                    labels: dates,
+                    datasets: [
+                        { label: p1, data: data.charts.p1.rolling_mdd.map(v => v !== null ? v*100 : null), borderColor: '#ef4444', backgroundColor: 'rgba(239, 68, 68, 0.1)', fill: true, borderWidth: 2, pointRadius: 0 },
+                        { label: p2, data: data.charts.p2.rolling_mdd.map(v => v !== null ? v*100 : null), borderColor: '#f59e0b', backgroundColor: 'rgba(245, 158, 11, 0.1)', fill: true, borderWidth: 2, pointRadius: 0 }
+                    ]
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false, interaction: { mode: 'index', intersect: false },
+                    plugins: { tooltip: { callbacks: { label: (ctx) => `${ctx.dataset.label}: ${ctx.parsed.y.toFixed(2)}%` } } },
+                    scales: { y: { title: { display: true, text: 'Drawdown (%)' }, max: 0 } }
+                }
+            });
+
+            // 4. Boxplot (Sfrutta il plugin esterno)
+            if(boxChart) boxChart.destroy();
+            const p1Returns = data.charts.p1.rolling_return.filter(v => v !== null).map(v => v*100);
+            const p2Returns = data.charts.p2.rolling_return.filter(v => v !== null).map(v => v*100);
+
+            boxChart = new Chart(document.getElementById('boxplotChart'), {
+                type: 'boxplot',
+                data: {
+                    labels: [p1, p2],
+                    datasets: [{
+                        label: 'Distribuzione Rendimenti',
+                        backgroundColor: ['rgba(59, 130, 246, 0.5)', 'rgba(16, 185, 129, 0.5)'],
+                        borderColor: [p1Color, p2Color],
+                        borderWidth: 1,
+                        outlierBackgroundColor: '#000',
+                        data: [p1Returns, p2Returns]
+                    }]
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    plugins: { legend: { display: false } },
+                    scales: { y: { title: { display: true, text: 'Rendimento (%)' } } }
                 }
             });
         }
